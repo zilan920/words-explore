@@ -47,8 +47,10 @@ export const serverConfig: {
     }
   },
   storage: {
+    // File storage config: keep driver="file" and set sqlitePath to the DB file path.
     driver: "file",
     sqlitePath: "data/words-explore.sqlite",
+    // Used only when driver="libsql"; keep the auth token in .env.local.
     libsqlUrl: ""
   }
 };
