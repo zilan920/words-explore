@@ -48,9 +48,9 @@ export const serverConfig: {
   },
   storage: {
     // File storage config: keep driver="file" and set sqlitePath to the DB file path.
-    driver: "file",
+    driver: "libsql",
     sqlitePath: "data/words-explore.sqlite",
     // Used only when driver="libsql"; keep the auth token in .env.local.
-    libsqlUrl: ""
+    libsqlUrl: "libsql://words-explore-superfran.aws-ap-northeast-1.turso.io"
   }
 };
