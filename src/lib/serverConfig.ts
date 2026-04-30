@@ -23,9 +23,43 @@ export interface ServerStorageConfig {
   libsqlUrl: string;
 }
 
+export interface ServerSecurityConfig {
+  userCreationRateLimit: {
+    windowMs: number;
+    max: number;
+  };
+  userCreationGlobalRateLimit: {
+    windowMs: number;
+    max: number;
+  };
+  recommendationRateLimit: {
+    windowMs: number;
+    max: number;
+    lockTtlMs: number;
+  };
+  recommendationIpRateLimit: {
+    windowMs: number;
+    max: number;
+  };
+  recommendationGlobalRateLimit: {
+    windowMs: number;
+    max: number;
+  };
+  importLimits: {
+    maxFileBytes: number;
+    maxAssessmentSessions: number;
+    maxAssessmentAnswers: number;
+    maxRecommendationBatches: number;
+    maxWordRecords: number;
+    maxWordActions: number;
+    maxTextLength: number;
+  };
+}
+
 export const serverConfig: {
   llm: ServerLlmConfig;
   storage: ServerStorageConfig;
+  security: ServerSecurityConfig;
 } = {
   llm: {
     provider: "deepseek",
@@ -52,5 +86,37 @@ export const serverConfig: {
     sqlitePath: "data/words-explore.sqlite",
     // Used only when driver="libsql"; keep the auth token in .env.local.
     libsqlUrl: "libsql://words-explore-superfran.aws-ap-northeast-1.turso.io"
+  },
+  security: {
+    userCreationRateLimit: {
+      windowMs: 60_000,
+      max: 20
+    },
+    userCreationGlobalRateLimit: {
+      windowMs: 60_000,
+      max: 100
+    },
+    recommendationRateLimit: {
+      windowMs: 60_000,
+      max: 4,
+      lockTtlMs: 45_000
+    },
+    recommendationIpRateLimit: {
+      windowMs: 60_000,
+      max: 8
+    },
+    recommendationGlobalRateLimit: {
+      windowMs: 60_000,
+      max: 30
+    },
+    importLimits: {
+      maxFileBytes: 5 * 1024 * 1024,
+      maxAssessmentSessions: 20,
+      maxAssessmentAnswers: 300,
+      maxRecommendationBatches: 200,
+      maxWordRecords: 2_000,
+      maxWordActions: 5_000,
+      maxTextLength: 2_000
+    }
   }
 };

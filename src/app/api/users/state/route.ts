@@ -1,6 +1,7 @@
 import { z } from "zod";
-import { usernameSchema, fail, ok } from "@/lib/api";
+import { ApiError, usernameSchema, fail, ok } from "@/lib/api";
 import { getStorage } from "@/lib/db/storage";
+import { requireUserAuth } from "@/lib/security";
 
 export const runtime = "nodejs";
 
@@ -12,10 +13,11 @@ export async function POST(request: Request) {
   try {
     const { username } = bodySchema.parse(await request.json());
     const storage = await getStorage();
+    await requireUserAuth(request, storage, username);
     const state = await storage.getUserState(username);
 
     if (!state) {
-      return fail(new Error("User not found"), 404);
+      return fail(new ApiError(404, "用户不存在"));
     }
 
     return ok({ state });

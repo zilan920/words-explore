@@ -3,6 +3,7 @@ PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS users (
   username TEXT PRIMARY KEY,
+  access_token_hash TEXT,
   created_at TEXT NOT NULL,
   target_difficulty INTEGER,
   estimated_level TEXT,
@@ -72,6 +73,17 @@ CREATE TABLE IF NOT EXISTS word_actions (
   created_at TEXT NOT NULL,
   FOREIGN KEY (word_id) REFERENCES word_records(id) ON DELETE CASCADE,
   FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS api_rate_limits (
+  key TEXT PRIMARY KEY,
+  window_start INTEGER NOT NULL,
+  count INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS api_locks (
+  key TEXT PRIMARY KEY,
+  expires_at INTEGER NOT NULL
 );
 `;
 

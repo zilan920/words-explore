@@ -56,19 +56,25 @@ interface RecommendationStreamPayload {
 }
 
 const usernameKey = "words-explore.username";
+const accessTokenKey = "words-explore.accessToken";
 const unknownAnswer = "我不认识";
 const { wordBatchSize, autoNextSeconds } = appConfig;
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
+  const headers = new Headers(init?.headers);
+  const accessToken = getStoredAccessToken();
+
+  if (!(init?.body instanceof FormData) && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+
+  if (accessToken && !headers.has("Authorization")) {
+    headers.set("Authorization", `Bearer ${accessToken}`);
+  }
+
   const response = await fetch(path, {
     ...init,
-    headers:
-      init?.body instanceof FormData
-        ? init.headers
-        : {
-            "Content-Type": "application/json",
-            ...init?.headers
-          }
+    headers
   });
   const payload = (await response.json().catch(() => null)) as (T & { error?: string }) | null;
 
@@ -77,6 +83,24 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   return payload as T;
+}
+
+function getStoredAccessToken(): string | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  return window.localStorage.getItem(accessTokenKey);
+}
+
+function clearStoredSession(): void {
+  window.localStorage.removeItem(usernameKey);
+  window.localStorage.removeItem(accessTokenKey);
+}
+
+function storeSession(username: string, accessToken: string): void {
+  window.localStorage.setItem(usernameKey, username);
+  window.localStorage.setItem(accessTokenKey, accessToken);
 }
 
 function consumeSseEvents(buffer: string): { events: SseEvent[]; remainder: string } {
@@ -191,7 +215,7 @@ export default function Home() {
       setState(payload.state);
       setStudyWords(payload.state.latestWords);
     } catch (loadError) {
-      window.localStorage.removeItem(usernameKey);
+      clearStoredSession();
       setUsername(null);
       setState(null);
       setStudyWords([]);
@@ -203,7 +227,9 @@ export default function Home() {
 
   useEffect(() => {
     const stored = window.localStorage.getItem(usernameKey);
-    if (!stored) {
+    const accessToken = window.localStorage.getItem(accessTokenKey);
+    if (!stored || !accessToken) {
+      clearStoredSession();
       setBusy(null);
       return;
     }
@@ -222,15 +248,18 @@ export default function Home() {
       setAutoNextPending(false);
       setAutoNextWordIds([]);
       setAutoNextArmed(false);
-      const payload = await api<{ username: string; state: UserState }>("/api/users/random", {
+      const payload = await api<{ username: string; accessToken: string; state: UserState }>("/api/users/random", {
         method: "POST"
       });
       const assessmentPayload = await api<AssessmentView>("/api/assessment/start", {
         method: "POST",
+        headers: {
+          Authorization: `Bearer ${payload.accessToken}`
+        },
         body: JSON.stringify({ username: payload.username })
       });
 
-      window.localStorage.setItem(usernameKey, payload.username);
+      storeSession(payload.username, payload.accessToken);
       setUsername(payload.username);
       setState(payload.state);
       setStudyWords(payload.state.latestWords);
@@ -336,10 +365,12 @@ export default function Home() {
       if (replaceCurrent) {
         setStudyWords([]);
       }
+      const accessToken = getStoredAccessToken();
       const response = await fetch("/api/recommendations/stream", {
         method: "POST",
         headers: {
-          "Content-Type": "application/json"
+          "Content-Type": "application/json",
+          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {})
         },
         body: JSON.stringify({ username })
       });
@@ -522,7 +553,7 @@ export default function Home() {
 
   async function importDatabase(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
-    if (!file) {
+    if (!file || !username) {
       return;
     }
 
@@ -536,6 +567,7 @@ export default function Home() {
       setAutoNextWordIds([]);
       setAutoNextArmed(false);
       const formData = new FormData();
+      formData.append("username", username);
       formData.append("file", file);
       const payload = await api<{ username: string; state: UserState }>("/api/db/import", {
         method: "POST",
@@ -623,12 +655,40 @@ export default function Home() {
     }
   }
 
-  function exportDatabase() {
+  async function exportDatabase() {
     if (!username) {
       return;
     }
 
-    window.location.href = `/api/db/export?username=${encodeURIComponent(username)}`;
+    try {
+      setBusy("export");
+      setError(null);
+      const accessToken = getStoredAccessToken();
+      const response = await fetch(`/api/db/export?username=${encodeURIComponent(username)}`, {
+        headers: accessToken
+          ? {
+              Authorization: `Bearer ${accessToken}`
+            }
+          : undefined
+      });
+
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(payload?.error ?? "导出失败");
+      }
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `${username}.sqlite`;
+      anchor.click();
+      window.URL.revokeObjectURL(url);
+    } catch (exportError) {
+      setError(exportError instanceof Error ? exportError.message : "导出失败");
+    } finally {
+      setBusy(null);
+    }
   }
 
   function pickAnswer(questionId: string, option: string) {
@@ -1317,8 +1377,16 @@ function SettingsView({
         <Metric label="单词" value={state.stats.totalWords} tone="steel" />
         <Metric label="等级" value={state.user.estimatedLevel ?? "-"} tone="leaf" />
       </div>
-      <button className="button-base w-full bg-ink px-4 text-white" onClick={onExport}>
-        <Download size={20} aria-hidden />
+      <button
+        className="button-base w-full bg-ink px-4 text-white"
+        disabled={busy === "export"}
+        onClick={onExport}
+      >
+        {busy === "export" ? (
+          <Loader2 className="animate-spin" size={20} aria-hidden />
+        ) : (
+          <Download size={20} aria-hidden />
+        )}
         导出数据库
       </button>
       <button

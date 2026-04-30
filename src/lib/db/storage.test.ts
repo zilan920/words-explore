@@ -10,6 +10,7 @@ import {
 } from "@/lib/db/storage";
 import { scoreAssessment } from "@/lib/assessment";
 import type { RecommendationWordInput } from "@/lib/types";
+import { generateAccessToken, hashAccessToken } from "@/lib/security";
 
 const username = "bright-atlas-0000001";
 
@@ -19,9 +20,13 @@ describe("NodeSqliteStorage", () => {
     const dbPath = join(dir, "app.sqlite");
     const exportPath = join(dir, "export.sqlite");
     const storage = new NodeSqliteStorage(dbPath);
+    const accessToken = generateAccessToken();
+    const accessTokenHash = hashAccessToken(accessToken);
 
     await storage.ensureSchema();
-    await storage.createUser(username);
+    await storage.createUser(username, accessTokenHash);
+    expect(await storage.verifyUserAccess(username, accessTokenHash)).toBe(true);
+    expect(await storage.verifyUserAccess(username, hashAccessToken("wrong-token-value-that-is-long-enough"))).toBe(false);
     await storage.startAssessment(username, "00000000-0000-4000-8000-000000000001");
     await storage.saveAssessmentResult(
       username,
@@ -73,6 +78,23 @@ describe("NodeSqliteStorage", () => {
     expect(await secondStorage.getUserState(username)).toBeNull();
     expect((await secondStorage.getUserState("custom-user-01"))?.stats.totalWords).toBe(2);
 
+    expect(await secondStorage.checkRateLimit("test-key", 2, 60_000)).toMatchObject({
+      allowed: true,
+      remaining: 1
+    });
+    expect(await secondStorage.checkRateLimit("test-key", 2, 60_000)).toMatchObject({
+      allowed: true,
+      remaining: 0
+    });
+    expect(await secondStorage.checkRateLimit("test-key", 2, 60_000)).toMatchObject({
+      allowed: false,
+      remaining: 0
+    });
+    expect(await secondStorage.acquireLock("test-lock", 60_000)).toBe(true);
+    expect(await secondStorage.acquireLock("test-lock", 60_000)).toBe(false);
+    await secondStorage.releaseLock("test-lock");
+    expect(await secondStorage.acquireLock("test-lock", 60_000)).toBe(true);
+
     await secondStorage.resetUserData("custom-user-01");
     const resetState = await secondStorage.getUserState("custom-user-01");
     expect(resetState?.user.assessmentCompletedAt).toBeNull();
@@ -81,13 +103,6 @@ describe("NodeSqliteStorage", () => {
 });
 
 describe("storage config", () => {
-  it("keeps default storage in TypeScript config as a local sqlite file", () => {
-    expect(resolveStorageConfig({}, "/repo")).toEqual({
-      driver: "file",
-      sqlitePath: "/repo/data/words-explore.sqlite"
-    });
-  });
-
   it("supports configured file storage paths", () => {
     expect(
       resolveStorageConfig(

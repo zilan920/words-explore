@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
+import { z } from "zod";
 import type { AssessmentScore } from "@/lib/assessment";
 import type {
   AssessmentAnswerRow,
@@ -18,13 +19,15 @@ import type {
 } from "@/lib/types";
 import { schemaSql } from "@/lib/db/schema";
 import { serverConfig, type ServerStorageConfig } from "@/lib/serverConfig";
+import { isValidUsername } from "@/lib/username";
 
 const nodeRequire = createRequire(import.meta.url);
 
 export interface StorageAdapter {
   ensureSchema(): Promise<void>;
-  createUser(username: string): Promise<UserRow>;
+  createUser(username: string, accessTokenHash?: string): Promise<UserRow>;
   getUser(username: string): Promise<UserRow | null>;
+  verifyUserAccess(username: string, accessTokenHash: string): Promise<boolean>;
   resetUserData(username: string): Promise<UserRow>;
   renameUser(oldUsername: string, newUsername: string): Promise<UserRow>;
   startAssessment(username: string, sessionId: string): Promise<AssessmentSessionRow>;
@@ -39,7 +42,16 @@ export interface StorageAdapter {
   recordWordAction(username: string, wordId: string, action: WordAction): Promise<WordRecordRow>;
   getUserState(username: string): Promise<UserState | null>;
   exportUserBundle(username: string): Promise<UserBundle>;
-  importUserBundle(bundle: UserBundle): Promise<UserRow>;
+  importUserBundle(bundle: UserBundle, targetUsername?: string): Promise<UserRow>;
+  checkRateLimit(key: string, limit: number, windowMs: number): Promise<RateLimitResult>;
+  acquireLock(key: string, ttlMs: number): Promise<boolean>;
+  releaseLock(key: string): Promise<void>;
+}
+
+export interface RateLimitResult {
+  allowed: boolean;
+  remaining: number;
+  retryAfterSeconds: number;
 }
 
 let storagePromise: Promise<StorageAdapter> | null = null;
@@ -113,16 +125,18 @@ export class NodeSqliteStorage implements StorageAdapter {
   async ensureSchema(): Promise<void> {
     const db = await this.open();
     db.exec(schemaSql);
+    migrateNodeSchema(db);
   }
 
-  async createUser(username: string): Promise<UserRow> {
+  async createUser(username: string, accessTokenHash: string | null = null): Promise<UserRow> {
     const db = await this.open();
     const createdAt = nowIso();
 
     db.prepare(
-      `INSERT INTO users (username, created_at, target_difficulty, estimated_level, assessment_completed_at)
-       VALUES (?, ?, NULL, NULL, NULL)`
-    ).run(username, createdAt);
+      `INSERT INTO users
+       (username, access_token_hash, created_at, target_difficulty, estimated_level, assessment_completed_at)
+       VALUES (?, ?, ?, NULL, NULL, NULL)`
+    ).run(username, accessTokenHash, createdAt);
 
     return {
       username,
@@ -136,6 +150,14 @@ export class NodeSqliteStorage implements StorageAdapter {
   async getUser(username: string): Promise<UserRow | null> {
     const row = await this.getOne<UserTableRow>("SELECT * FROM users WHERE username = ?", [username]);
     return row ? mapUser(row) : null;
+  }
+
+  async verifyUserAccess(username: string, accessTokenHash: string): Promise<boolean> {
+    const row = await this.getOne<{ access_token_hash: string | null }>(
+      "SELECT access_token_hash FROM users WHERE username = ?",
+      [username]
+    );
+    return Boolean(row?.access_token_hash && row.access_token_hash === accessTokenHash);
   }
 
   async resetUserData(username: string): Promise<UserRow> {
@@ -174,6 +196,7 @@ export class NodeSqliteStorage implements StorageAdapter {
     }
 
     const current = await this.assertUser(oldUsername);
+    const accessTokenHash = await this.getUserAccessTokenHash(oldUsername);
     const existing = await this.getUser(newUsername);
     if (existing) {
       throw new Error("User ID already exists");
@@ -184,10 +207,11 @@ export class NodeSqliteStorage implements StorageAdapter {
     try {
       db.prepare(
         `INSERT INTO users
-         (username, created_at, target_difficulty, estimated_level, assessment_completed_at)
-         VALUES (?, ?, ?, ?, ?)`
+         (username, access_token_hash, created_at, target_difficulty, estimated_level, assessment_completed_at)
+         VALUES (?, ?, ?, ?, ?, ?)`
       ).run(
         newUsername,
+        accessTokenHash,
         current.createdAt,
         current.targetDifficulty,
         current.estimatedLevel,
@@ -506,21 +530,85 @@ export class NodeSqliteStorage implements StorageAdapter {
     };
   }
 
-  async importUserBundle(bundle: UserBundle): Promise<UserRow> {
+  async importUserBundle(bundle: UserBundle, targetUsername?: string): Promise<UserRow> {
     const db = await this.open();
-    const username = bundle.user.username;
+    const imported = validateUserBundle(bundle);
+    const finalBundle = targetUsername ? rewriteBundleUsername(imported, targetUsername) : imported;
+    const username = finalBundle.user.username;
+    const accessTokenHash = targetUsername ? await this.getUserAccessTokenHash(targetUsername) : null;
+
+    if (targetUsername && accessTokenHash === null) {
+      throw new Error("User not found");
+    }
 
     db.exec("BEGIN");
     try {
       deleteUserData(db, username);
-      insertBundle(db, bundle);
+      insertBundle(db, finalBundle, accessTokenHash);
       db.exec("COMMIT");
     } catch (error) {
       db.exec("ROLLBACK");
       throw error;
     }
 
-    return bundle.user;
+    return finalBundle.user;
+  }
+
+  async checkRateLimit(key: string, limit: number, windowMs: number): Promise<RateLimitResult> {
+    const db = await this.open();
+    const now = Date.now();
+    db.prepare("DELETE FROM api_rate_limits WHERE window_start < ?").run(now - windowMs * 4);
+
+    const row = db.prepare("SELECT window_start, count FROM api_rate_limits WHERE key = ?").get(key) as
+      | { window_start: number; count: number }
+      | undefined;
+
+    if (!row || now - Number(row.window_start) >= windowMs) {
+      db.prepare(
+        `INSERT INTO api_rate_limits (key, window_start, count)
+         VALUES (?, ?, 1)
+         ON CONFLICT(key) DO UPDATE SET window_start = excluded.window_start, count = 1`
+      ).run(key, now);
+      return { allowed: true, remaining: Math.max(0, limit - 1), retryAfterSeconds: 0 };
+    }
+
+    if (Number(row.count) >= limit) {
+      return {
+        allowed: false,
+        remaining: 0,
+        retryAfterSeconds: Math.max(1, Math.ceil((windowMs - (now - Number(row.window_start))) / 1000))
+      };
+    }
+
+    db.prepare("UPDATE api_rate_limits SET count = count + 1 WHERE key = ?").run(key);
+    return {
+      allowed: true,
+      remaining: Math.max(0, limit - Number(row.count) - 1),
+      retryAfterSeconds: 0
+    };
+  }
+
+  async acquireLock(key: string, ttlMs: number): Promise<boolean> {
+    const db = await this.open();
+    const now = Date.now();
+    const expiresAt = now + ttlMs;
+
+    db.prepare("DELETE FROM api_locks WHERE expires_at <= ?").run(now);
+
+    try {
+      db.prepare("INSERT INTO api_locks (key, expires_at) VALUES (?, ?)").run(key, expiresAt);
+      return true;
+    } catch (error) {
+      if (isUniqueConstraintError(error)) {
+        return false;
+      }
+      throw error;
+    }
+  }
+
+  async releaseLock(key: string): Promise<void> {
+    const db = await this.open();
+    db.prepare("DELETE FROM api_locks WHERE key = ?").run(key);
   }
 
   async exportUserToSqlite(username: string, outputPath: string): Promise<void> {
@@ -537,7 +625,15 @@ export class NodeSqliteStorage implements StorageAdapter {
     return user;
   }
 
-  private async getAll<T extends Record<string, unknown>>(
+  private async getUserAccessTokenHash(username: string): Promise<string | null> {
+    const row = await this.getOne<{ access_token_hash: string | null }>(
+      "SELECT access_token_hash FROM users WHERE username = ?",
+      [username]
+    );
+    return row?.access_token_hash ?? null;
+  }
+
+  private async getAll<T>(
     sql: string,
     args: SqlValue[]
   ): Promise<T[]> {
@@ -545,7 +641,7 @@ export class NodeSqliteStorage implements StorageAdapter {
     return db.prepare(sql).all(...args) as T[];
   }
 
-  private async getOne<T extends Record<string, unknown>>(
+  private async getOne<T>(
     sql: string,
     args: SqlValue[]
   ): Promise<T | null> {
@@ -578,16 +674,17 @@ class LibsqlStorage implements StorageAdapter {
     for (const statement of splitSql(schemaSql)) {
       await client.execute(statement);
     }
+    await migrateLibsqlSchema(client);
   }
 
-  async createUser(username: string): Promise<UserRow> {
+  async createUser(username: string, accessTokenHash: string | null = null): Promise<UserRow> {
     const client = await this.client();
     const createdAt = nowIso();
     await client.execute({
       sql: `INSERT INTO users
-            (username, created_at, target_difficulty, estimated_level, assessment_completed_at)
-            VALUES (?, ?, NULL, NULL, NULL)`,
-      args: [username, createdAt]
+            (username, access_token_hash, created_at, target_difficulty, estimated_level, assessment_completed_at)
+            VALUES (?, ?, ?, NULL, NULL, NULL)`,
+      args: [username, accessTokenHash, createdAt]
     });
 
     return {
@@ -602,6 +699,14 @@ class LibsqlStorage implements StorageAdapter {
   async getUser(username: string): Promise<UserRow | null> {
     const row = await this.getOne<UserTableRow>("SELECT * FROM users WHERE username = ?", [username]);
     return row ? mapUser(row) : null;
+  }
+
+  async verifyUserAccess(username: string, accessTokenHash: string): Promise<boolean> {
+    const row = await this.getOne<{ access_token_hash: string | null }>(
+      "SELECT access_token_hash FROM users WHERE username = ?",
+      [username]
+    );
+    return Boolean(row?.access_token_hash && row.access_token_hash === accessTokenHash);
   }
 
   async resetUserData(username: string): Promise<UserRow> {
@@ -634,6 +739,7 @@ class LibsqlStorage implements StorageAdapter {
     }
 
     const current = await this.assertUser(oldUsername);
+    const accessTokenHash = await this.getUserAccessTokenHash(oldUsername);
     const existing = await this.getUser(newUsername);
     if (existing) {
       throw new Error("User ID already exists");
@@ -644,10 +750,11 @@ class LibsqlStorage implements StorageAdapter {
       [
         {
           sql: `INSERT INTO users
-                (username, created_at, target_difficulty, estimated_level, assessment_completed_at)
-                VALUES (?, ?, ?, ?, ?)`,
+                (username, access_token_hash, created_at, target_difficulty, estimated_level, assessment_completed_at)
+                VALUES (?, ?, ?, ?, ?, ?)`,
           args: [
             newUsername,
+            accessTokenHash,
             current.createdAt,
             current.targetDifficulty,
             current.estimatedLevel,
@@ -943,16 +1050,91 @@ class LibsqlStorage implements StorageAdapter {
     };
   }
 
-  async importUserBundle(bundle: UserBundle): Promise<UserRow> {
+  async importUserBundle(bundle: UserBundle, targetUsername?: string): Promise<UserRow> {
     const client = await this.client();
-    const username = bundle.user.username;
+    const imported = validateUserBundle(bundle);
+    const finalBundle = targetUsername ? rewriteBundleUsername(imported, targetUsername) : imported;
+    const username = finalBundle.user.username;
+    const accessTokenHash = targetUsername ? await this.getUserAccessTokenHash(targetUsername) : null;
+
+    if (targetUsername && accessTokenHash === null) {
+      throw new Error("User not found");
+    }
+
     const deleteStatements: LibsqlStatement[] = [
       { sql: "DELETE FROM users WHERE username = ?", args: [username] }
     ];
-    const insertStatements = bundleToStatements(bundle);
+    const insertStatements = bundleToStatements(finalBundle, accessTokenHash);
 
     await client.batch([...deleteStatements, ...insertStatements], "write");
-    return bundle.user;
+    return finalBundle.user;
+  }
+
+  async checkRateLimit(key: string, limit: number, windowMs: number): Promise<RateLimitResult> {
+    const client = await this.client();
+    const now = Date.now();
+    await client.execute({
+      sql: "DELETE FROM api_rate_limits WHERE window_start < ?",
+      args: [now - windowMs * 4]
+    });
+
+    const row = await this.getOne<{ window_start: number; count: number }>(
+      "SELECT window_start, count FROM api_rate_limits WHERE key = ?",
+      [key]
+    );
+
+    if (!row || now - Number(row.window_start) >= windowMs) {
+      await client.execute({
+        sql: `INSERT INTO api_rate_limits (key, window_start, count)
+              VALUES (?, ?, 1)
+              ON CONFLICT(key) DO UPDATE SET window_start = excluded.window_start, count = 1`,
+        args: [key, now]
+      });
+      return { allowed: true, remaining: Math.max(0, limit - 1), retryAfterSeconds: 0 };
+    }
+
+    if (Number(row.count) >= limit) {
+      return {
+        allowed: false,
+        remaining: 0,
+        retryAfterSeconds: Math.max(1, Math.ceil((windowMs - (now - Number(row.window_start))) / 1000))
+      };
+    }
+
+    await client.execute({
+      sql: "UPDATE api_rate_limits SET count = count + 1 WHERE key = ?",
+      args: [key]
+    });
+    return {
+      allowed: true,
+      remaining: Math.max(0, limit - Number(row.count) - 1),
+      retryAfterSeconds: 0
+    };
+  }
+
+  async acquireLock(key: string, ttlMs: number): Promise<boolean> {
+    const client = await this.client();
+    const now = Date.now();
+
+    await client.execute({ sql: "DELETE FROM api_locks WHERE expires_at <= ?", args: [now] });
+
+    try {
+      await client.execute({
+        sql: "INSERT INTO api_locks (key, expires_at) VALUES (?, ?)",
+        args: [key, now + ttlMs]
+      });
+      return true;
+    } catch (error) {
+      if (isUniqueConstraintError(error)) {
+        return false;
+      }
+      throw error;
+    }
+  }
+
+  async releaseLock(key: string): Promise<void> {
+    const client = await this.client();
+    await client.execute({ sql: "DELETE FROM api_locks WHERE key = ?", args: [key] });
   }
 
   private async assertUser(username: string): Promise<UserRow> {
@@ -964,7 +1146,15 @@ class LibsqlStorage implements StorageAdapter {
     return user;
   }
 
-  private async getAll<T extends Record<string, unknown>>(
+  private async getUserAccessTokenHash(username: string): Promise<string | null> {
+    const row = await this.getOne<{ access_token_hash: string | null }>(
+      "SELECT access_token_hash FROM users WHERE username = ?",
+      [username]
+    );
+    return row?.access_token_hash ?? null;
+  }
+
+  private async getAll<T>(
     sql: string,
     args: SqlValue[]
   ): Promise<T[]> {
@@ -973,7 +1163,7 @@ class LibsqlStorage implements StorageAdapter {
     return result.rows as T[];
   }
 
-  private async getOne<T extends Record<string, unknown>>(
+  private async getOne<T>(
     sql: string,
     args: SqlValue[]
   ): Promise<T | null> {
@@ -1001,9 +1191,10 @@ export async function writeBundleToSqlite(bundle: UserBundle, outputPath: string
   const db = new DatabaseSync(outputPath);
 
   db.exec(schemaSql);
+  migrateNodeSchema(db);
   db.exec("BEGIN");
   try {
-    insertBundle(db, bundle);
+    insertBundle(db, validateUserBundle(bundle));
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");
@@ -1019,13 +1210,14 @@ export async function readBundleFromSqlite(filePath: string): Promise<UserBundle
 
   try {
     validateSchema(db);
+    assertImportTableCounts(db);
     const users = db.prepare("SELECT * FROM users ORDER BY created_at DESC").all() as UserTableRow[];
     if (users.length !== 1) {
       throw new Error("Imported database must contain exactly one user");
     }
 
     const username = users[0].username;
-    return {
+    return validateUserBundle({
       user: mapUser(users[0]),
       assessmentSessions: (
         db.prepare("SELECT * FROM assessment_sessions WHERE username = ?").all(username) as AssessmentSessionTableRow[]
@@ -1042,19 +1234,24 @@ export async function readBundleFromSqlite(filePath: string): Promise<UserBundle
       wordActions: (
         db.prepare("SELECT * FROM word_actions WHERE username = ?").all(username) as WordActionTableRow[]
       ).map(mapWordAction)
-    };
+    });
   } finally {
     db.close();
   }
 }
 
-function insertBundle(db: import("node:sqlite").DatabaseSync, bundle: UserBundle): void {
+function insertBundle(
+  db: import("node:sqlite").DatabaseSync,
+  bundle: UserBundle,
+  accessTokenHash: string | null = null
+): void {
   db.prepare(
     `INSERT INTO users
-     (username, created_at, target_difficulty, estimated_level, assessment_completed_at)
-     VALUES (?, ?, ?, ?, ?)`
+     (username, access_token_hash, created_at, target_difficulty, estimated_level, assessment_completed_at)
+     VALUES (?, ?, ?, ?, ?, ?)`
   ).run(
     bundle.user.username,
+    accessTokenHash,
     bundle.user.createdAt,
     bundle.user.targetDifficulty,
     bundle.user.estimatedLevel,
@@ -1156,14 +1353,202 @@ function validateSchema(db: import("node:sqlite").DatabaseSync): void {
   }
 }
 
-function bundleToStatements(bundle: UserBundle): LibsqlStatement[] {
+function assertImportTableCounts(db: import("node:sqlite").DatabaseSync): void {
+  const limits = serverConfig.security.importLimits;
+  const tableLimits: Record<string, number> = {
+    users: 1,
+    assessment_sessions: limits.maxAssessmentSessions,
+    assessment_answers: limits.maxAssessmentAnswers,
+    recommendation_batches: limits.maxRecommendationBatches,
+    word_records: limits.maxWordRecords,
+    word_actions: limits.maxWordActions
+  };
+
+  for (const [table, maxRows] of Object.entries(tableLimits)) {
+    const row = db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number };
+    if (Number(row.count) > maxRows) {
+      throw new Error(`Imported database has too many rows in ${table}`);
+    }
+  }
+}
+
+function validateUserBundle(bundle: UserBundle): UserBundle {
+  const limits = serverConfig.security.importLimits;
+  const text = z.string().min(1).max(limits.maxTextLength);
+  const shortText = z.string().min(1).max(120);
+  const nullableText = z.string().max(limits.maxTextLength).nullable();
+  const username = z.string().refine(isValidUsername, "Invalid username");
+  const id = z.string().min(1).max(120);
+  const difficulty = z.number().int().min(1).max(10);
+  const timestamp = z.string().min(1).max(80);
+
+  const parsed = z
+    .object({
+      user: z.object({
+        username,
+        createdAt: timestamp,
+        targetDifficulty: difficulty.nullable(),
+        estimatedLevel: nullableText,
+        assessmentCompletedAt: timestamp.nullable()
+      }),
+      assessmentSessions: z
+        .array(
+          z.object({
+            id,
+            username,
+            startedAt: timestamp,
+            submittedAt: timestamp.nullable(),
+            score: z.number().int().min(0).max(10).nullable(),
+            estimatedLevel: nullableText,
+            targetDifficulty: difficulty.nullable()
+          })
+        )
+        .max(limits.maxAssessmentSessions),
+      assessmentAnswers: z
+        .array(
+          z.object({
+            id,
+            sessionId: id,
+            username,
+            questionId: id,
+            word: shortText,
+            correctAnswer: text,
+            selectedAnswer: text,
+            isCorrect: z.union([z.literal(0), z.literal(1)]),
+            difficulty
+          })
+        )
+        .max(limits.maxAssessmentAnswers),
+      recommendationBatches: z
+        .array(
+          z.object({
+            id,
+            username,
+            createdAt: timestamp,
+            source: shortText,
+            targetDifficulty: difficulty
+          })
+        )
+        .max(limits.maxRecommendationBatches),
+      wordRecords: z
+        .array(
+          z.object({
+            id,
+            batchId: id,
+            username,
+            word: shortText,
+            partOfSpeech: shortText,
+            definitionZh: text,
+            exampleEn: text,
+            exampleZh: text,
+            difficultyReason: text,
+            difficulty,
+            status: z.enum(["new", "learned", "too_easy", "learning"]),
+            createdAt: timestamp,
+            updatedAt: timestamp
+          })
+        )
+        .max(limits.maxWordRecords),
+      wordActions: z
+        .array(
+          z.object({
+            id,
+            wordId: id,
+            username,
+            action: z.enum(["learned", "too_easy", "learning"]),
+            createdAt: timestamp
+          })
+        )
+        .max(limits.maxWordActions)
+    })
+    .parse(bundle);
+
+  assertBundleConsistency(parsed);
+  return parsed;
+}
+
+function assertBundleConsistency(bundle: UserBundle): void {
+  const username = bundle.user.username;
+  const sessionIds = new Set(bundle.assessmentSessions.map((session) => session.id));
+  const batchIds = new Set(bundle.recommendationBatches.map((batch) => batch.id));
+  const wordIds = new Set(bundle.wordRecords.map((word) => word.id));
+
+  for (const row of [
+    ...bundle.assessmentSessions,
+    ...bundle.assessmentAnswers,
+    ...bundle.recommendationBatches,
+    ...bundle.wordRecords,
+    ...bundle.wordActions
+  ]) {
+    if (row.username !== username) {
+      throw new Error("Imported database contains rows for multiple users");
+    }
+  }
+
+  for (const answer of bundle.assessmentAnswers) {
+    if (!sessionIds.has(answer.sessionId)) {
+      throw new Error("Imported database contains orphan assessment answers");
+    }
+  }
+
+  for (const word of bundle.wordRecords) {
+    if (!batchIds.has(word.batchId)) {
+      throw new Error("Imported database contains orphan word records");
+    }
+  }
+
+  for (const action of bundle.wordActions) {
+    if (!wordIds.has(action.wordId)) {
+      throw new Error("Imported database contains orphan word actions");
+    }
+  }
+}
+
+function rewriteBundleUsername(bundle: UserBundle, username: string): UserBundle {
+  if (!isValidUsername(username)) {
+    throw new Error("Invalid username");
+  }
+
+  return {
+    user: {
+      ...bundle.user,
+      username
+    },
+    assessmentSessions: bundle.assessmentSessions.map((session) => ({ ...session, username })),
+    assessmentAnswers: bundle.assessmentAnswers.map((answer) => ({ ...answer, username })),
+    recommendationBatches: bundle.recommendationBatches.map((batch) => ({ ...batch, username })),
+    wordRecords: bundle.wordRecords.map((word) => ({ ...word, username })),
+    wordActions: bundle.wordActions.map((action) => ({ ...action, username }))
+  };
+}
+
+function migrateNodeSchema(db: import("node:sqlite").DatabaseSync): void {
+  const columns = db.prepare("PRAGMA table_info(users)").all() as Array<{ name: string }>;
+  if (!columns.some((column) => column.name === "access_token_hash")) {
+    db.exec("ALTER TABLE users ADD COLUMN access_token_hash TEXT");
+  }
+}
+
+async function migrateLibsqlSchema(client: LibsqlClient): Promise<void> {
+  const result = await client.execute("PRAGMA table_info(users)");
+  const hasAccessTokenHash = result.rows.some((row) => row.name === "access_token_hash");
+  if (!hasAccessTokenHash) {
+    await client.execute("ALTER TABLE users ADD COLUMN access_token_hash TEXT");
+  }
+}
+
+function bundleToStatements(
+  bundle: UserBundle,
+  accessTokenHash: string | null = null
+): LibsqlStatement[] {
   return [
     {
       sql: `INSERT INTO users
-            (username, created_at, target_difficulty, estimated_level, assessment_completed_at)
-            VALUES (?, ?, ?, ?, ?)`,
+            (username, access_token_hash, created_at, target_difficulty, estimated_level, assessment_completed_at)
+            VALUES (?, ?, ?, ?, ?, ?)`,
       args: [
         bundle.user.username,
+        accessTokenHash,
         bundle.user.createdAt,
         bundle.user.targetDifficulty,
         bundle.user.estimatedLevel,
@@ -1258,6 +1643,11 @@ function sanitizeStorageUrl(url: string): string {
   return url.replace(/\/\/([^:@/]+):([^@/]+)@/, "//[redacted]:[redacted]@");
 }
 
+function isUniqueConstraintError(error: unknown): boolean {
+  const message = String(error).toLowerCase();
+  return message.includes("unique") || message.includes("constraint");
+}
+
 interface LibsqlClient {
   execute(statement: string | LibsqlStatement): Promise<{ rows: Array<Record<string, unknown>> }>;
   batch(statements: LibsqlStatement[], mode?: "read" | "write"): Promise<unknown>;
@@ -1276,6 +1666,7 @@ function loadSqlite(): typeof import("node:sqlite") {
 
 interface UserTableRow extends Record<string, unknown> {
   username: string;
+  access_token_hash: string | null;
   created_at: string;
   target_difficulty: number | null;
   estimated_level: string | null;

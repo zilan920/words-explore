@@ -2,6 +2,7 @@ import { z } from "zod";
 import { scoreAssessment } from "@/lib/assessment";
 import { usernameSchema, fail, ok } from "@/lib/api";
 import { getStorage } from "@/lib/db/storage";
+import { requireUserAuth } from "@/lib/security";
 
 export const runtime = "nodejs";
 
@@ -24,6 +25,7 @@ export async function POST(request: Request) {
     const result = scoreAssessment(body.sessionId, body.answers);
     const storage = await getStorage();
 
+    await requireUserAuth(request, storage, body.username);
     await storage.saveAssessmentResult(body.username, result);
 
     const state = await storage.getUserState(body.username);

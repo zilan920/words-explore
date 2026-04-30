@@ -1,7 +1,15 @@
 import { z } from "zod";
 import { usernameSchema, fail } from "@/lib/api";
-import { getStorage } from "@/lib/db/storage";
+import { getStorage, type StorageAdapter } from "@/lib/db/storage";
 import { streamRecommendationWords, type RecommendationStreamEvent } from "@/lib/llm/recommendations";
+import { serverConfig } from "@/lib/serverConfig";
+import {
+  acquireRequestLock,
+  enforceRateLimit,
+  getClientIp,
+  rateLimitKey,
+  requireUserAuth
+} from "@/lib/security";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -12,10 +20,33 @@ const bodySchema = z.object({
 
 export async function POST(request: Request) {
   let username: string;
+  let storage!: StorageAdapter;
+  let releaseLock!: () => Promise<void>;
 
   try {
     const body = bodySchema.parse(await request.json());
     username = body.username;
+    storage = await getStorage();
+    const clientIp = getClientIp(request);
+    await requireUserAuth(request, storage, username);
+    await enforceRateLimit(storage, {
+      key: rateLimitKey("recommendations:user", username, clientIp),
+      windowMs: serverConfig.security.recommendationRateLimit.windowMs,
+      max: serverConfig.security.recommendationRateLimit.max
+    });
+    await enforceRateLimit(storage, {
+      key: rateLimitKey("recommendations:ip", clientIp),
+      ...serverConfig.security.recommendationIpRateLimit
+    });
+    await enforceRateLimit(storage, {
+      key: rateLimitKey("recommendations:global"),
+      ...serverConfig.security.recommendationGlobalRateLimit
+    });
+    releaseLock = await acquireRequestLock(
+      storage,
+      rateLimitKey("recommendations:lock", username),
+      serverConfig.security.recommendationRateLimit.lockTtlMs
+    );
   } catch (error) {
     return fail(error);
   }
@@ -29,7 +60,6 @@ export async function POST(request: Request) {
 
       void (async () => {
         try {
-          const storage = await getStorage();
           const context = await storage.getLearningContext(username);
           let thinking = false;
 
@@ -87,13 +117,14 @@ export async function POST(request: Request) {
           });
           controller.close();
         } catch (error) {
-          const message = error instanceof Error ? error.message : "推荐失败";
           console.warn("[api/recommendations/stream] failed", {
             username,
-            error: message
+            error: error instanceof Error ? error.message : String(error)
           });
-          send("error", { error: message });
+          send("error", { error: "推荐失败，请稍后再试" });
           controller.close();
+        } finally {
+          await releaseLock();
         }
       })();
     }

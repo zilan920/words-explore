@@ -2,6 +2,7 @@ import { z } from "zod";
 import { startAssessmentSession } from "@/lib/assessment";
 import { usernameSchema, fail, ok } from "@/lib/api";
 import { getStorage } from "@/lib/db/storage";
+import { requireUserAuth } from "@/lib/security";
 
 export const runtime = "nodejs";
 
@@ -15,6 +16,7 @@ export async function POST(request: Request) {
     const assessment = startAssessmentSession();
     const storage = await getStorage();
 
+    await requireUserAuth(request, storage, username);
     await storage.startAssessment(username, assessment.sessionId);
 
     return ok({

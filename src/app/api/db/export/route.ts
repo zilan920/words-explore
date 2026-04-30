@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { usernameSchema, fail } from "@/lib/api";
 import { getStorage, writeBundleToSqlite } from "@/lib/db/storage";
+import { requireUserAuth } from "@/lib/security";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -15,6 +16,7 @@ export async function GET(request: Request) {
     const url = new URL(request.url);
     const username = usernameSchema.parse(url.searchParams.get("username"));
     const storage = await getStorage();
+    await requireUserAuth(request, storage, username);
     const bundle = await storage.exportUserBundle(username);
 
     await writeBundleToSqlite(bundle, tempPath);
