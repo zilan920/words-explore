@@ -24,7 +24,7 @@ describe("NodeSqliteStorage", () => {
     const accessTokenHash = hashAccessToken(accessToken);
 
     await storage.ensureSchema();
-    await storage.createUser(username, accessTokenHash);
+    await storage.createUser(username, accessTokenHash, "cet6");
     expect(await storage.verifyUserAccess(username, accessTokenHash)).toBe(true);
     expect(await storage.verifyUserAccess(username, hashAccessToken("wrong-token-value-that-is-long-enough"))).toBe(false);
     await storage.startAssessment(username, "00000000-0000-4000-8000-000000000001");
@@ -54,6 +54,7 @@ describe("NodeSqliteStorage", () => {
     await storage.recordWordAction(username, batch.words[1].id, "learning");
 
     const state = await storage.getUserState(username);
+    expect(state?.user.learningGoal).toBe("cet6");
     expect(state?.stats.learned).toBe(1);
     expect(state?.stats.learning).toBe(1);
     expect(state?.latestWords).toHaveLength(2);
@@ -64,6 +65,7 @@ describe("NodeSqliteStorage", () => {
     const imported = await readBundleFromSqlite(exportPath);
 
     expect(imported.user.username).toBe(username);
+    expect(imported.user.learningGoal).toBe("cet6");
     expect(imported.wordRecords).toHaveLength(2);
     expect(imported.wordActions).toHaveLength(2);
 
@@ -77,6 +79,9 @@ describe("NodeSqliteStorage", () => {
     await secondStorage.renameUser(username, "custom-user-01");
     expect(await secondStorage.getUserState(username)).toBeNull();
     expect((await secondStorage.getUserState("custom-user-01"))?.stats.totalWords).toBe(2);
+
+    await secondStorage.updateLearningGoal("custom-user-01", "toefl");
+    expect((await secondStorage.getUserState("custom-user-01"))?.user.learningGoal).toBe("toefl");
 
     expect(await secondStorage.checkRateLimit("test-key", 2, 60_000)).toMatchObject({
       allowed: true,
@@ -97,6 +102,7 @@ describe("NodeSqliteStorage", () => {
 
     await secondStorage.resetUserData("custom-user-01");
     const resetState = await secondStorage.getUserState("custom-user-01");
+    expect(resetState?.user.learningGoal).toBe("toefl");
     expect(resetState?.user.assessmentCompletedAt).toBeNull();
     expect(resetState?.stats.totalWords).toBe(0);
   });

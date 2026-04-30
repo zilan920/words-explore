@@ -4,7 +4,6 @@ import type { ChangeEvent, ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowRight,
-  BookOpen,
   ChevronDown,
   ChevronUp,
   CheckCircle2,
@@ -21,6 +20,10 @@ import {
   UserRound
 } from "lucide-react";
 import { appConfig } from "@/lib/appConfig";
+import {
+  learningGoalOptions,
+  type LearningGoal
+} from "@/lib/learningGoals";
 import type { RecommendationWordInput, UserState, WordAction, WordRecordRow } from "@/lib/types";
 
 type Tab = "study" | "history" | "settings";
@@ -53,6 +56,10 @@ interface RecommendationStreamPayload {
   words?: WordRecordRow[];
   state?: UserState;
   error?: string;
+}
+
+interface GenerateRecommendationsOptions {
+  replaceCurrent?: boolean;
 }
 
 const usernameKey = "words-explore.username";
@@ -179,6 +186,7 @@ function applyWordUpdates(current: WordRecordRow[], nextState: UserState): WordR
 export default function Home() {
   const [username, setUsername] = useState<string | null>(null);
   const [state, setState] = useState<UserState | null>(null);
+  const [selectedLearningGoal, setSelectedLearningGoal] = useState<LearningGoal>("cet4");
   const [tab, setTab] = useState<Tab>("study");
   const [assessment, setAssessment] = useState<AssessmentView | null>(null);
   const [answers, setAnswers] = useState<Record<string, string>>({});
@@ -249,7 +257,8 @@ export default function Home() {
       setAutoNextWordIds([]);
       setAutoNextArmed(false);
       const payload = await api<{ username: string; accessToken: string; state: UserState }>("/api/users/random", {
-        method: "POST"
+        method: "POST",
+        body: JSON.stringify({ learningGoal: selectedLearningGoal })
       });
       const assessmentPayload = await api<AssessmentView>("/api/assessment/start", {
         method: "POST",
@@ -347,7 +356,7 @@ export default function Home() {
     }
   }
 
-  const generateRecommendations = useCallback(async (options?: { replaceCurrent?: boolean }) => {
+  const generateRecommendations = useCallback(async (options?: GenerateRecommendationsOptions) => {
     if (!username) {
       return;
     }
@@ -587,7 +596,7 @@ export default function Home() {
   }
 
   async function resetUserData() {
-    if (!username || !window.confirm("重置后会清空当前 user id 下的初测、推荐和学习记录。")) {
+    if (!username) {
       return;
     }
 
@@ -618,15 +627,12 @@ export default function Home() {
     }
   }
 
-  async function renameUser() {
+  async function renameUser(nextUsernameInput: string) {
     if (!username) {
       return;
     }
 
-    const nextUsername = window
-      .prompt("输入新的 user id：小写字母、数字或连字符，3-40 位。", username)
-      ?.trim()
-      .toLowerCase();
+    const nextUsername = nextUsernameInput.trim().toLowerCase();
 
     if (!nextUsername || nextUsername === username) {
       return;
@@ -650,6 +656,36 @@ export default function Home() {
       setStudyWords(payload.state.latestWords);
     } catch (renameError) {
       setError(renameError instanceof Error ? renameError.message : "修改失败");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function updateLearningGoal(nextLearningGoal: LearningGoal) {
+    if (!username || state?.user.learningGoal === nextLearningGoal) {
+      return;
+    }
+
+    try {
+      setBusy(`goal:${nextLearningGoal}`);
+      setError(null);
+      setStreamWords([]);
+      setLlmThinking(false);
+      setAutoNextPending(false);
+      setAutoNextWordIds([]);
+      setAutoNextArmed(false);
+      const payload = await api<{ state: UserState }>("/api/users/learning-goal", {
+        method: "POST",
+        body: JSON.stringify({ username, learningGoal: nextLearningGoal })
+      });
+      setState(payload.state);
+      setStudyWords(payload.state.latestWords);
+      setAssessment(null);
+      setAnswers({});
+      setQuestionIndex(0);
+      setResult(null);
+    } catch (goalError) {
+      setError(goalError instanceof Error ? goalError.message : "目标修改失败");
     } finally {
       setBusy(null);
     }
@@ -710,50 +746,18 @@ export default function Home() {
 
   return (
     <main className="mobile-shell flex flex-col">
-      <header className="safe-pad sticky top-0 z-10 border-b border-black/5 bg-[#fbfcfc]/95 pb-3 pt-4 backdrop-blur">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <p className="text-xs font-bold uppercase text-leaf">Words Explore</p>
-            <h1 className="mt-1 text-2xl font-black text-ink">词汇探索</h1>
-          </div>
-          <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-ink text-white">
-            <BookOpen size={22} aria-hidden />
-          </div>
-        </div>
+      <header className="safe-pad sticky top-0 z-10 border-b border-black/5 bg-[#fbfcfc]/95 py-2 backdrop-blur">
         {username ? (
-          <div className="mt-3 flex min-h-9 items-center gap-2 rounded-lg border border-black/10 bg-white px-3 text-sm text-steel">
-            <UserRound size={16} aria-hidden />
-            <span className="truncate font-semibold">{username}</span>
-            <div className="ml-auto flex shrink-0 items-center gap-1">
-              <button
-                className="button-base min-h-8 rounded-md border border-black/10 bg-mist px-2 text-xs text-ink"
-                disabled={busy === "rename"}
-                onClick={renameUser}
-                title="修改 user id"
-              >
-                {busy === "rename" ? (
-                  <Loader2 className="animate-spin" size={14} aria-hidden />
-                ) : (
-                  <PencilLine size={14} aria-hidden />
-                )}
-                修改
-              </button>
-              <button
-                className="button-base min-h-8 rounded-md border border-coral/25 bg-coral/10 px-2 text-xs text-coral"
-                disabled={busy === "reset"}
-                onClick={resetUserData}
-                title="重置数据"
-              >
-                {busy === "reset" ? (
-                  <Loader2 className="animate-spin" size={14} aria-hidden />
-                ) : (
-                  <RotateCcw size={14} aria-hidden />
-                )}
-                重置
-              </button>
-            </div>
+          <div className="flex min-h-8 items-center gap-2 text-sm text-steel">
+            <UserRound size={15} aria-hidden />
+            <span className="truncate font-black text-ink">{username}</span>
           </div>
-        ) : null}
+        ) : (
+          <div>
+            <p className="text-[11px] font-bold uppercase text-leaf">Words Explore</p>
+            <h1 className="text-lg font-black leading-tight text-ink">词汇探索</h1>
+          </div>
+        )}
       </header>
 
       {error ? (
@@ -768,7 +772,12 @@ export default function Home() {
         {busy === "boot" ? (
           <CenteredLoader label="载入中" />
         ) : !username || !state ? (
-          <CreateUser busy={busy === "create"} onCreate={beginLearning} />
+          <CreateUser
+            busy={busy === "create"}
+            selectedGoal={selectedLearningGoal}
+            onGoalChange={setSelectedLearningGoal}
+            onCreate={beginLearning}
+          />
         ) : tab === "study" ? (
           <StudyView
             state={state}
@@ -798,6 +807,9 @@ export default function Home() {
             username={username}
             state={state}
             busy={busy}
+            onRename={renameUser}
+            onReset={resetUserData}
+            onLearningGoalChange={updateLearningGoal}
             onExport={exportDatabase}
             onImport={() => importInputRef.current?.click()}
           />
@@ -823,12 +835,47 @@ export default function Home() {
   );
 }
 
-function CreateUser({ busy, onCreate }: { busy: boolean; onCreate: () => void }) {
+function CreateUser({
+  busy,
+  selectedGoal,
+  onGoalChange,
+  onCreate
+}: {
+  busy: boolean;
+  selectedGoal: LearningGoal;
+  onGoalChange: (goal: LearningGoal) => void;
+  onCreate: () => void;
+}) {
   return (
-    <div className="flex min-h-[58dvh] flex-col justify-center">
-      <div className="border-y border-black/10 py-8">
-        <p className="text-sm font-bold text-steel">移动端英语词汇学习</p>
-        <h2 className="mt-3 text-4xl font-black leading-tight text-ink">开始词汇初测</h2>
+    <div className="flex min-h-[52dvh] flex-col justify-center">
+      <div className="border-y border-black/10 py-6">
+        <h2 className="text-2xl font-black leading-tight text-ink">开始初测</h2>
+        <div className="mt-5">
+          <p className="text-sm font-black text-ink">学习目标</p>
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            {learningGoalOptions.map((goal) => {
+              const active = selectedGoal === goal.id;
+
+              return (
+                <button
+                  key={goal.id}
+                  className={`min-h-[76px] rounded-lg border px-3 py-3 text-left transition ${
+                    active
+                      ? "border-leaf bg-leaf/10 text-leaf"
+                      : "border-black/10 bg-white text-ink"
+                  }`}
+                  disabled={busy}
+                  onClick={() => onGoalChange(goal.id)}
+                >
+                  <span className="block text-base font-black">{goal.shortLabel}</span>
+                  <span className="mt-1 block text-xs font-semibold leading-5 text-steel">
+                    {goal.description}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
         <button
           className="button-base mt-8 w-full bg-leaf px-4 text-white"
           disabled={busy}
@@ -880,7 +927,7 @@ function StudyView({
   onStartAssessment: () => void;
   onPickAnswer: (questionId: string, option: string) => void;
   onNextQuestion: () => void;
-  onGenerate: () => void;
+  onGenerate: (options?: GenerateRecommendationsOptions) => void;
   onAct: (wordId: string, action: WordAction) => void;
 }) {
   const isGenerating = busy === "recommend";
@@ -889,7 +936,9 @@ function StudyView({
     [latestWords, streamWords]
   );
   const showAutoNext = autoNextArmed && !isGenerating && displayedWords.length >= wordBatchSize;
-  const [collapsedWordIds, setCollapsedWordIds] = useState<Set<string>>(() => new Set());
+  const [collapsedWordIds, setCollapsedWordIds] = useState<Set<string>>(
+    () => new Set(displayedWords.filter((word) => word.status !== "new").map((word) => word.id))
+  );
   const allWordCardsCollapsed =
     !isGenerating &&
     displayedWords.length >= wordBatchSize &&
@@ -1003,7 +1052,7 @@ function StudyView({
         <button
           className="button-base mt-6 w-full bg-leaf px-4 text-white"
           disabled={isGenerating}
-          onClick={onGenerate}
+          onClick={() => onGenerate()}
         >
           {isGenerating ? (
             <Loader2 className="animate-spin" size={20} aria-hidden />
@@ -1037,7 +1086,7 @@ function StudyView({
         <button
           className="button-base bg-ink px-3 text-sm text-white"
           disabled={isGenerating}
-          onClick={onGenerate}
+          onClick={() => onGenerate({ replaceCurrent: true })}
         >
           {isGenerating ? (
             <Loader2 className="animate-spin" size={18} aria-hidden />
@@ -1080,7 +1129,7 @@ function ResultPanel({
   busy: boolean;
   streamCount: number;
   llmThinking: boolean;
-  onGenerate: () => void;
+  onGenerate: (options?: GenerateRecommendationsOptions) => void;
 }) {
   return (
     <div className="rounded-lg border border-black/10 bg-white p-5 shadow-soft">
@@ -1091,7 +1140,7 @@ function ResultPanel({
         <Metric label="目标" value={result.targetDifficulty} tone="amber" />
       </div>
       {busy ? <GenerationStatus thinking={llmThinking} count={streamCount} /> : null}
-      <button className="button-base mt-6 w-full bg-leaf px-4 text-white" disabled={busy} onClick={onGenerate}>
+      <button className="button-base mt-6 w-full bg-leaf px-4 text-white" disabled={busy} onClick={() => onGenerate()}>
         {busy ? <Loader2 className="animate-spin" size={20} aria-hidden /> : <Sparkles size={20} aria-hidden />}
         生成 {wordBatchSize} 个词
       </button>
@@ -1130,7 +1179,7 @@ function AutoNextCountdown({
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
             <p className="text-sm font-black text-ink">{seconds} 秒后获取下一批单词</p>
-            <p className="mt-1 text-xs font-semibold text-steel">新单词会继续追加在当前列表下方</p>
+            <p className="mt-1 text-xs font-semibold text-steel">新单词会替换当前学习列表</p>
           </div>
           <button
             className="button-base min-h-9 shrink-0 border border-coral/25 bg-coral/10 px-3 text-sm text-coral"
@@ -1200,9 +1249,11 @@ function WordCard({
         </div>
       </button>
       <div
+        aria-hidden={collapsed}
         className={`grid transition-[grid-template-rows,opacity,transform] duration-300 ease-out ${
           collapsed ? "grid-rows-[0fr] -translate-y-2 opacity-0" : "grid-rows-[1fr] translate-y-0 opacity-100"
         }`}
+        inert={collapsed ? true : undefined}
       >
         <div className="overflow-hidden">
           <p className="mt-4 text-lg font-black text-leaf">{word.definitionZh}</p>
@@ -1358,49 +1409,184 @@ function SettingsView({
   username,
   state,
   busy,
+  onRename,
+  onReset,
+  onLearningGoalChange,
   onExport,
   onImport
 }: {
   username: string;
   state: UserState;
   busy: string | null;
+  onRename: (nextUsername: string) => void;
+  onReset: () => void;
+  onLearningGoalChange: (goal: LearningGoal) => void;
   onExport: () => void;
   onImport: () => void;
 }) {
+  const activeGoal = state.user.learningGoal;
+  const [usernameDraft, setUsernameDraft] = useState(username);
+  const [confirmingReset, setConfirmingReset] = useState(false);
+  const normalizedUsernameDraft = usernameDraft.trim().toLowerCase();
+  const usernameChanged = normalizedUsernameDraft.length > 0 && normalizedUsernameDraft !== username;
+
+  useEffect(() => {
+    setUsernameDraft(username);
+  }, [username]);
+
+  useEffect(() => {
+    if (busy !== "reset") {
+      return;
+    }
+
+    setConfirmingReset(false);
+  }, [busy]);
+
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
       <div>
         <h2 className="text-2xl font-black text-ink">设置</h2>
-        <p className="mt-1 break-all text-sm font-semibold text-steel">{username}</p>
       </div>
-      <div className="grid grid-cols-2 gap-3">
-        <Metric label="单词" value={state.stats.totalWords} tone="steel" />
-        <Metric label="等级" value={state.user.estimatedLevel ?? "-"} tone="leaf" />
-      </div>
-      <button
-        className="button-base w-full bg-ink px-4 text-white"
-        disabled={busy === "export"}
-        onClick={onExport}
-      >
-        {busy === "export" ? (
-          <Loader2 className="animate-spin" size={20} aria-hidden />
+
+      <section className="space-y-3">
+        <div className="border-b border-black/10 pb-3">
+          <div className="min-w-0">
+            <p className="text-xs font-black text-steel">用户 ID</p>
+            <div className="mt-2 flex gap-2">
+              <input
+                className="min-h-10 min-w-0 flex-1 rounded-lg border border-black/10 bg-white px-3 text-sm font-black text-ink outline-none transition focus:border-leaf"
+                value={usernameDraft}
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                aria-label="用户 ID"
+                disabled={busy === "rename"}
+                onChange={(event) => setUsernameDraft(event.target.value)}
+              />
+              <button
+                className="button-base min-h-10 shrink-0 border border-black/10 bg-white px-3 text-sm text-ink"
+                disabled={busy === "rename" || !usernameChanged}
+                onClick={() => onRename(usernameDraft)}
+              >
+                {busy === "rename" ? (
+                  <Loader2 className="animate-spin" size={16} aria-hidden />
+                ) : (
+                  <PencilLine size={16} aria-hidden />
+                )}
+                保存
+              </button>
+            </div>
+            <p className="mt-1 text-xs font-semibold text-steel">小写字母、数字或连字符，3-40 位</p>
+          </div>
+        </div>
+
+        <div>
+          <p className="text-xs font-black text-steel">学习目标</p>
+          <div className="mt-2 grid grid-cols-2 gap-2">
+            {learningGoalOptions.map((goal) => {
+              const active = activeGoal === goal.id;
+              const updating = busy === `goal:${goal.id}`;
+
+              return (
+                <button
+                  key={goal.id}
+                  className={`min-h-14 rounded-lg border px-3 py-2 text-left transition ${
+                    active
+                      ? "border-leaf bg-leaf/10 text-leaf"
+                      : "border-black/10 bg-white text-ink"
+                  }`}
+                  disabled={active || busy?.startsWith("goal:")}
+                  onClick={() => onLearningGoalChange(goal.id)}
+                >
+                  <span className="flex items-center justify-between gap-2">
+                    <span className="text-sm font-black">{goal.shortLabel}</span>
+                    {updating ? <Loader2 className="shrink-0 animate-spin" size={14} aria-hidden /> : null}
+                  </span>
+                  <span className="mt-1 block truncate text-xs font-semibold text-steel">
+                    {goal.description}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {confirmingReset ? (
+          <div className="rounded-lg border border-coral/25 bg-coral/10 p-3">
+            <p className="text-sm font-semibold leading-5 text-coral">
+              将清空当前 user id 下的初测、推荐和学习记录。
+            </p>
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <button
+                className="button-base border border-black/10 bg-white px-3 text-sm text-ink"
+                disabled={busy === "reset"}
+                onClick={() => setConfirmingReset(false)}
+              >
+                取消
+              </button>
+              <button
+                className="button-base bg-coral px-3 text-sm text-white"
+                disabled={busy === "reset"}
+                onClick={() => {
+                  setConfirmingReset(false);
+                  onReset();
+                }}
+              >
+                {busy === "reset" ? (
+                  <Loader2 className="animate-spin" size={18} aria-hidden />
+                ) : (
+                  <RotateCcw size={18} aria-hidden />
+                )}
+                确认重置
+              </button>
+            </div>
+          </div>
         ) : (
-          <Download size={20} aria-hidden />
+          <button
+            className="button-base w-full border border-coral/25 bg-coral/10 px-4 text-coral"
+            disabled={busy === "reset"}
+            onClick={() => setConfirmingReset(true)}
+          >
+            {busy === "reset" ? (
+              <Loader2 className="animate-spin" size={20} aria-hidden />
+            ) : (
+              <RotateCcw size={20} aria-hidden />
+            )}
+            重置学习数据
+          </button>
         )}
-        导出数据库
-      </button>
-      <button
-        className="button-base w-full border border-black/10 bg-white px-4 text-ink"
-        disabled={busy === "import"}
-        onClick={onImport}
-      >
-        {busy === "import" ? (
-          <Loader2 className="animate-spin" size={20} aria-hidden />
-        ) : (
-          <Upload size={20} aria-hidden />
-        )}
-        导入数据库
-      </button>
+      </section>
+
+      <section className="space-y-3">
+        <div className="grid grid-cols-2 gap-3">
+          <Metric label="单词" value={state.stats.totalWords} tone="steel" />
+          <Metric label="等级" value={state.user.estimatedLevel ?? "-"} tone="leaf" />
+        </div>
+        <button
+          className="button-base w-full bg-ink px-4 text-white"
+          disabled={busy === "export"}
+          onClick={onExport}
+        >
+          {busy === "export" ? (
+            <Loader2 className="animate-spin" size={20} aria-hidden />
+          ) : (
+            <Download size={20} aria-hidden />
+          )}
+          导出数据库
+        </button>
+        <button
+          className="button-base w-full border border-black/10 bg-white px-4 text-ink"
+          disabled={busy === "import"}
+          onClick={onImport}
+        >
+          {busy === "import" ? (
+            <Loader2 className="animate-spin" size={20} aria-hidden />
+          ) : (
+            <Upload size={20} aria-hidden />
+          )}
+          导入数据库
+        </button>
+      </section>
     </div>
   );
 }

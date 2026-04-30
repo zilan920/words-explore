@@ -18,6 +18,12 @@ import type {
   WordRecordRow
 } from "@/lib/types";
 import { schemaSql } from "@/lib/db/schema";
+import {
+  defaultLearningGoal,
+  learningGoalIds,
+  normalizeLearningGoal,
+  type LearningGoal
+} from "@/lib/learningGoals";
 import { serverConfig, type ServerStorageConfig } from "@/lib/serverConfig";
 import { isValidUsername } from "@/lib/username";
 
@@ -25,11 +31,16 @@ const nodeRequire = createRequire(import.meta.url);
 
 export interface StorageAdapter {
   ensureSchema(): Promise<void>;
-  createUser(username: string, accessTokenHash?: string): Promise<UserRow>;
+  createUser(
+    username: string,
+    accessTokenHash?: string | null,
+    learningGoal?: LearningGoal
+  ): Promise<UserRow>;
   getUser(username: string): Promise<UserRow | null>;
   verifyUserAccess(username: string, accessTokenHash: string): Promise<boolean>;
   resetUserData(username: string): Promise<UserRow>;
   renameUser(oldUsername: string, newUsername: string): Promise<UserRow>;
+  updateLearningGoal(username: string, learningGoal: LearningGoal): Promise<UserRow>;
   startAssessment(username: string, sessionId: string): Promise<AssessmentSessionRow>;
   saveAssessmentResult(username: string, score: AssessmentScore): Promise<void>;
   getLearningContext(username: string): Promise<LearningContext>;
@@ -128,19 +139,24 @@ export class NodeSqliteStorage implements StorageAdapter {
     migrateNodeSchema(db);
   }
 
-  async createUser(username: string, accessTokenHash: string | null = null): Promise<UserRow> {
+  async createUser(
+    username: string,
+    accessTokenHash: string | null = null,
+    learningGoal: LearningGoal = defaultLearningGoal
+  ): Promise<UserRow> {
     const db = await this.open();
     const createdAt = nowIso();
 
     db.prepare(
       `INSERT INTO users
-       (username, access_token_hash, created_at, target_difficulty, estimated_level, assessment_completed_at)
-       VALUES (?, ?, ?, NULL, NULL, NULL)`
-    ).run(username, accessTokenHash, createdAt);
+       (username, access_token_hash, created_at, learning_goal, target_difficulty, estimated_level, assessment_completed_at)
+       VALUES (?, ?, ?, ?, NULL, NULL, NULL)`
+    ).run(username, accessTokenHash, createdAt, learningGoal);
 
     return {
       username,
       createdAt,
+      learningGoal,
       targetDifficulty: null,
       estimatedLevel: null,
       assessmentCompletedAt: null
@@ -207,12 +223,13 @@ export class NodeSqliteStorage implements StorageAdapter {
     try {
       db.prepare(
         `INSERT INTO users
-         (username, access_token_hash, created_at, target_difficulty, estimated_level, assessment_completed_at)
-         VALUES (?, ?, ?, ?, ?, ?)`
+         (username, access_token_hash, created_at, learning_goal, target_difficulty, estimated_level, assessment_completed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
       ).run(
         newUsername,
         accessTokenHash,
         current.createdAt,
+        current.learningGoal,
         current.targetDifficulty,
         current.estimatedLevel,
         current.assessmentCompletedAt
@@ -242,6 +259,14 @@ export class NodeSqliteStorage implements StorageAdapter {
     }
 
     return renamed;
+  }
+
+  async updateLearningGoal(username: string, learningGoal: LearningGoal): Promise<UserRow> {
+    await this.assertUser(username);
+    const db = await this.open();
+    db.prepare("UPDATE users SET learning_goal = ? WHERE username = ?").run(learningGoal, username);
+
+    return this.assertUser(username);
   }
 
   async startAssessment(username: string, sessionId: string): Promise<AssessmentSessionRow> {
@@ -326,6 +351,7 @@ export class NodeSqliteStorage implements StorageAdapter {
     const words = rows.map(mapWordRecord);
 
     return {
+      learningGoal: user.learningGoal,
       targetDifficulty: user.targetDifficulty ?? 4,
       estimatedLevel: user.estimatedLevel,
       learnedWords: words.filter((word) => word.status === "learned").map((word) => word.word),
@@ -677,19 +703,24 @@ class LibsqlStorage implements StorageAdapter {
     await migrateLibsqlSchema(client);
   }
 
-  async createUser(username: string, accessTokenHash: string | null = null): Promise<UserRow> {
+  async createUser(
+    username: string,
+    accessTokenHash: string | null = null,
+    learningGoal: LearningGoal = defaultLearningGoal
+  ): Promise<UserRow> {
     const client = await this.client();
     const createdAt = nowIso();
     await client.execute({
       sql: `INSERT INTO users
-            (username, access_token_hash, created_at, target_difficulty, estimated_level, assessment_completed_at)
-            VALUES (?, ?, ?, NULL, NULL, NULL)`,
-      args: [username, accessTokenHash, createdAt]
+            (username, access_token_hash, created_at, learning_goal, target_difficulty, estimated_level, assessment_completed_at)
+            VALUES (?, ?, ?, ?, NULL, NULL, NULL)`,
+      args: [username, accessTokenHash, createdAt, learningGoal]
     });
 
     return {
       username,
       createdAt,
+      learningGoal,
       targetDifficulty: null,
       estimatedLevel: null,
       assessmentCompletedAt: null
@@ -750,12 +781,13 @@ class LibsqlStorage implements StorageAdapter {
       [
         {
           sql: `INSERT INTO users
-                (username, access_token_hash, created_at, target_difficulty, estimated_level, assessment_completed_at)
-                VALUES (?, ?, ?, ?, ?, ?)`,
+                (username, access_token_hash, created_at, learning_goal, target_difficulty, estimated_level, assessment_completed_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)`,
           args: [
             newUsername,
             accessTokenHash,
             current.createdAt,
+            current.learningGoal,
             current.targetDifficulty,
             current.estimatedLevel,
             current.assessmentCompletedAt
@@ -777,6 +809,17 @@ class LibsqlStorage implements StorageAdapter {
     );
 
     return this.assertUser(newUsername);
+  }
+
+  async updateLearningGoal(username: string, learningGoal: LearningGoal): Promise<UserRow> {
+    await this.assertUser(username);
+    const client = await this.client();
+    await client.execute({
+      sql: "UPDATE users SET learning_goal = ? WHERE username = ?",
+      args: [learningGoal, username]
+    });
+
+    return this.assertUser(username);
   }
 
   async startAssessment(username: string, sessionId: string): Promise<AssessmentSessionRow> {
@@ -856,6 +899,7 @@ class LibsqlStorage implements StorageAdapter {
     const words = rows.map(mapWordRecord);
 
     return {
+      learningGoal: user.learningGoal,
       targetDifficulty: user.targetDifficulty ?? 4,
       estimatedLevel: user.estimatedLevel,
       learnedWords: words.filter((word) => word.status === "learned").map((word) => word.word),
@@ -1247,12 +1291,13 @@ function insertBundle(
 ): void {
   db.prepare(
     `INSERT INTO users
-     (username, access_token_hash, created_at, target_difficulty, estimated_level, assessment_completed_at)
-     VALUES (?, ?, ?, ?, ?, ?)`
+     (username, access_token_hash, created_at, learning_goal, target_difficulty, estimated_level, assessment_completed_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
   ).run(
     bundle.user.username,
     accessTokenHash,
     bundle.user.createdAt,
+    bundle.user.learningGoal,
     bundle.user.targetDifficulty,
     bundle.user.estimatedLevel,
     bundle.user.assessmentCompletedAt
@@ -1387,6 +1432,7 @@ function validateUserBundle(bundle: UserBundle): UserBundle {
       user: z.object({
         username,
         createdAt: timestamp,
+        learningGoal: z.enum(learningGoalIds).default(defaultLearningGoal),
         targetDifficulty: difficulty.nullable(),
         estimatedLevel: nullableText,
         assessmentCompletedAt: timestamp.nullable()
@@ -1527,6 +1573,9 @@ function migrateNodeSchema(db: import("node:sqlite").DatabaseSync): void {
   if (!columns.some((column) => column.name === "access_token_hash")) {
     db.exec("ALTER TABLE users ADD COLUMN access_token_hash TEXT");
   }
+  if (!columns.some((column) => column.name === "learning_goal")) {
+    db.exec(`ALTER TABLE users ADD COLUMN learning_goal TEXT NOT NULL DEFAULT '${defaultLearningGoal}'`);
+  }
 }
 
 async function migrateLibsqlSchema(client: LibsqlClient): Promise<void> {
@@ -1534,6 +1583,12 @@ async function migrateLibsqlSchema(client: LibsqlClient): Promise<void> {
   const hasAccessTokenHash = result.rows.some((row) => row.name === "access_token_hash");
   if (!hasAccessTokenHash) {
     await client.execute("ALTER TABLE users ADD COLUMN access_token_hash TEXT");
+  }
+  const hasLearningGoal = result.rows.some((row) => row.name === "learning_goal");
+  if (!hasLearningGoal) {
+    await client.execute(
+      `ALTER TABLE users ADD COLUMN learning_goal TEXT NOT NULL DEFAULT '${defaultLearningGoal}'`
+    );
   }
 }
 
@@ -1544,12 +1599,13 @@ function bundleToStatements(
   return [
     {
       sql: `INSERT INTO users
-            (username, access_token_hash, created_at, target_difficulty, estimated_level, assessment_completed_at)
-            VALUES (?, ?, ?, ?, ?, ?)`,
+            (username, access_token_hash, created_at, learning_goal, target_difficulty, estimated_level, assessment_completed_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)`,
       args: [
         bundle.user.username,
         accessTokenHash,
         bundle.user.createdAt,
+        bundle.user.learningGoal,
         bundle.user.targetDifficulty,
         bundle.user.estimatedLevel,
         bundle.user.assessmentCompletedAt
@@ -1668,6 +1724,7 @@ interface UserTableRow extends Record<string, unknown> {
   username: string;
   access_token_hash: string | null;
   created_at: string;
+  learning_goal?: string | null;
   target_difficulty: number | null;
   estimated_level: string | null;
   assessment_completed_at: string | null;
@@ -1731,6 +1788,7 @@ function mapUser(row: UserTableRow): UserRow {
   return {
     username: row.username,
     createdAt: row.created_at,
+    learningGoal: normalizeLearningGoal(row.learning_goal),
     targetDifficulty: row.target_difficulty,
     estimatedLevel: row.estimated_level,
     assessmentCompletedAt: row.assessment_completed_at

@@ -5,6 +5,7 @@ CREATE TABLE IF NOT EXISTS users (
   username TEXT PRIMARY KEY,
   access_token_hash TEXT,
   created_at TEXT NOT NULL,
+  learning_goal TEXT NOT NULL DEFAULT 'general',
   target_difficulty INTEGER,
   estimated_level TEXT,
   assessment_completed_at TEXT

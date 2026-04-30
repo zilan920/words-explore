@@ -6,6 +6,7 @@ import type {
 } from "openai/resources/chat/completions";
 import { z } from "zod";
 import { appConfig } from "@/lib/appConfig";
+import type { LearningGoal } from "@/lib/learningGoals";
 import { buildRecommendationPrompt, WORD_DELIMITER } from "@/lib/llm/recommendationPrompt";
 import { serverConfig, type ServerLlmConfig } from "@/lib/serverConfig";
 import type { LearningContext, RecommendationWordInput } from "@/lib/types";
@@ -357,9 +358,7 @@ async function callOpenAiCompatibleProviderStream(
       }
     }
 
-    const tail = normalizeJsonSegment(buffer);
-    if (tail.length > 0) {
-      const word = validateRecommendationWord(JSON.parse(tail));
+    for (const word of parseStreamingRecommendationTail(buffer, words.length)) {
       words.push(word);
       firstWordAt ??= Date.now();
       onEvent({
@@ -462,6 +461,27 @@ function normalizeJsonSegment(segment: string): string {
   return stripJsonFence(segment).trim().replace(/^,\s*/, "").replace(/,\s*$/, "").trim();
 }
 
+export function parseStreamingRecommendationTail(
+  buffer: string,
+  existingWordCount: number
+): RecommendationWordInput[] {
+  const tail = normalizeJsonSegment(buffer);
+  if (tail.length === 0) {
+    return [];
+  }
+
+  const parsed = JSON.parse(tail) as unknown;
+  try {
+    return [validateRecommendationWord(parsed)];
+  } catch (error) {
+    if (existingWordCount > 0) {
+      throw error;
+    }
+
+    return validateRecommendationWords(parsed);
+  }
+}
+
 function parseRecommendationPayload(value: unknown): RecommendationWordInput[] {
   const wrapped = recommendationSchema.safeParse(value);
   if (wrapped.success) {
@@ -506,20 +526,21 @@ function sanitizeProviderError(detail: string): string {
 }
 
 function mockRecommendations(context: LearningContext): RecommendationResult {
+  const pool = goalMockPools[context.learningGoal] ?? mockPool;
   const blocked = new Set(
     [...context.learnedWords, ...context.tooEasyWords, ...context.recentWords].map((word) =>
       word.toLowerCase()
     )
   );
-  const preferred = mockPool
+  const preferred = pool
     .filter((word) => Math.abs(word.difficulty - context.targetDifficulty) <= 2)
     .filter((word) => !blocked.has(word.word.toLowerCase()));
-  const fallback = mockPool.filter((word) => !blocked.has(word.word.toLowerCase()));
+  const fallback = pool.filter((word) => !blocked.has(word.word.toLowerCase()));
   const selected = uniqueByWord([...preferred, ...fallback]).slice(0, wordBatchSize);
 
   return {
     source: "mock",
-    words: selected.length === wordBatchSize ? selected : mockPool.slice(0, wordBatchSize)
+    words: selected.length === wordBatchSize ? selected : pool.slice(0, wordBatchSize)
   };
 }
 
@@ -672,3 +693,75 @@ const mockPool: RecommendationWordInput[] = [
     difficulty: 9
   }
 ];
+
+const goalMockPools: Record<LearningGoal, RecommendationWordInput[]> = {
+  general: mockPool,
+  cet4: [
+    goalWord("campus", "noun", "校园", "Campus life helps students build social skills.", "校园生活帮助学生建立社交能力。", "四级高频校园场景词。", 2),
+    goalWord("average", "adjective", "平均的", "The average temperature is higher this year.", "今年的平均气温更高。", "四级阅读常见基础形容词。", 3),
+    goalWord("available", "adjective", "可获得的", "Free seats are available in the front row.", "前排还有空座位。", "四级听力和阅读常见词。", 4),
+    goalWord("efficient", "adjective", "高效的", "An efficient plan saves time and energy.", "高效的计划节省时间和精力。", "四级写作可用表达。", 4),
+    goalWord("consume", "verb", "消耗", "Large screens consume more battery power.", "大屏幕会消耗更多电量。", "四级科技和生活话题常见。", 5),
+    goalWord("indicate", "verb", "表明", "The survey results indicate a clear change.", "调查结果表明出现了明显变化。", "四级阅读题干和文章高频。", 5),
+    goalWord("priority", "noun", "优先事项", "Safety should be our first priority.", "安全应该是我们的首要事项。", "四级观点表达常用。", 6),
+    goalWord("sufficient", "adjective", "足够的", "Students need sufficient sleep before exams.", "学生考试前需要足够睡眠。", "四级议论文常见词。", 6),
+    goalWord("perspective", "noun", "观点", "Try to see the issue from another perspective.", "试着从另一个角度看这个问题。", "四级阅读和写作常用抽象词。", 7),
+    goalWord("contribute", "verb", "贡献，促成", "Regular practice contributes to better fluency.", "规律练习有助于提升流利度。", "四级因果表达常用。", 5)
+  ],
+  cet6: [
+    goalWord("notion", "noun", "概念", "The notion of fairness changes across cultures.", "公平的概念会随文化而变化。", "六级阅读常见抽象名词。", 4),
+    goalWord("derive", "verb", "获得，源自", "Many English words derive from Latin.", "许多英语单词源自拉丁语。", "六级词源和学术语境常见。", 4),
+    goalWord("initiative", "noun", "主动性", "The project rewards students who show initiative.", "这个项目奖励表现出主动性的学生。", "六级职场和校园话题常见。", 5),
+    goalWord("substitute", "noun", "替代品", "Online meetings are not always a perfect substitute.", "线上会议并不总是完美替代品。", "六级阅读常用名词。", 5),
+    goalWord("controversial", "adjective", "有争议的", "The proposal remains controversial among experts.", "该提议在专家中仍有争议。", "六级议论文高频。", 6),
+    goalWord("substantial", "adjective", "大量的", "The policy brought substantial benefits.", "这项政策带来了大量好处。", "六级正式表达常见。", 6),
+    goalWord("innovation", "noun", "创新", "Innovation can improve traditional industries.", "创新可以改善传统行业。", "六级科技经济主题高频。", 7),
+    goalWord("obligation", "noun", "义务", "Citizens have an obligation to protect public spaces.", "公民有义务保护公共空间。", "六级社会话题常见词。", 7),
+    goalWord("paradigm", "noun", "范式", "Remote work created a new business paradigm.", "远程办公创造了新的商业范式。", "六级高阶抽象表达。", 8),
+    goalWord("underscore", "verb", "强调", "The data underscore the need for reform.", "数据强调了改革的必要性。", "六级阅读和写作高级动词。", 7)
+  ],
+  ielts: [
+    goalWord("accommodation", "noun", "住宿", "Affordable accommodation is a concern for students.", "可负担的住宿是学生关心的问题。", "雅思生活和教育场景高频。", 4),
+    goalWord("commute", "verb", "通勤", "Many people commute by train every day.", "许多人每天乘火车通勤。", "雅思城市生活话题常见。", 4),
+    goalWord("sustainable", "adjective", "可持续的", "Cities need sustainable transport systems.", "城市需要可持续的交通系统。", "雅思环境和城市话题核心词。", 5),
+    goalWord("adequate", "adjective", "足够的", "Children need adequate space to play.", "儿童需要足够的玩耍空间。", "雅思写作常用评价词。", 5),
+    goalWord("urbanization", "noun", "城市化", "Urbanization changes how communities interact.", "城市化改变社区互动方式。", "雅思社会发展话题高频。", 6),
+    goalWord("emission", "noun", "排放", "Vehicle emissions affect air quality.", "车辆排放影响空气质量。", "雅思环境类核心词。", 6),
+    goalWord("infrastructure", "noun", "基础设施", "Good infrastructure supports economic growth.", "良好的基础设施支持经济增长。", "雅思政府和城市话题常见。", 7),
+    goalWord("proficiency", "noun", "熟练程度", "Language proficiency improves with practice.", "语言熟练程度会随练习提高。", "雅思学习和移民语境常见。", 7),
+    goalWord("deteriorate", "verb", "恶化", "Public health may deteriorate without clean water.", "没有干净水源，公共健康可能恶化。", "雅思问题结果表达常用。", 8),
+    goalWord("mitigate", "verb", "缓解", "Governments can mitigate the effects of pollution.", "政府可以缓解污染影响。", "雅思写作高分动词。", 8)
+  ],
+  toefl: [
+    goalWord("lecture", "noun", "讲座", "The lecture explained how volcanoes form.", "讲座解释了火山如何形成。", "托福听力课堂场景高频。", 3),
+    goalWord("hypothesis", "noun", "假设", "The scientist tested a new hypothesis.", "科学家检验了一个新假设。", "托福学术讲座核心词。", 5),
+    goalWord("habitat", "noun", "栖息地", "The bird lost its natural habitat.", "这种鸟失去了自然栖息地。", "托福生物和环境话题高频。", 5),
+    goalWord("archaeology", "noun", "考古学", "Archaeology helps us understand ancient societies.", "考古学帮助我们理解古代社会。", "托福人文讲座常见。", 6),
+    goalWord("photosynthesis", "noun", "光合作用", "Plants use sunlight during photosynthesis.", "植物在光合作用中使用阳光。", "托福生命科学核心词。", 6),
+    goalWord("empirical", "adjective", "经验主义的", "The claim requires empirical evidence.", "这个说法需要经验证据。", "托福学术论证常用。", 7),
+    goalWord("phenomenon", "noun", "现象", "Migration is a common natural phenomenon.", "迁徙是一种常见自然现象。", "托福学术文章高频。", 7),
+    goalWord("predominant", "adjective", "占主导的", "Wind is the predominant force in this process.", "风是这个过程中的主导力量。", "托福听力和阅读高阶词。", 8),
+    goalWord("stratification", "noun", "分层", "Soil stratification reveals climate history.", "土壤分层揭示气候历史。", "托福地质和考古话题词。", 8),
+    goalWord("corroborate", "verb", "证实", "The second study corroborates the first result.", "第二项研究证实了第一个结果。", "托福学术论证高阶词。", 9)
+  ]
+};
+
+function goalWord(
+  word: string,
+  partOfSpeech: string,
+  definitionZh: string,
+  exampleEn: string,
+  exampleZh: string,
+  difficultyReason: string,
+  difficulty: number
+): RecommendationWordInput {
+  return {
+    word,
+    partOfSpeech,
+    definitionZh,
+    exampleEn,
+    exampleZh,
+    difficultyReason,
+    difficulty
+  };
+}

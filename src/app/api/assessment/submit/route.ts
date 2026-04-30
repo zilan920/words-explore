@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { scoreAssessment } from "@/lib/assessment";
+import { getAssessmentBank, scoreAssessment } from "@/lib/assessment";
 import { usernameSchema, fail, ok } from "@/lib/api";
 import { getStorage } from "@/lib/db/storage";
 import { requireUserAuth } from "@/lib/security";
@@ -22,10 +22,14 @@ const bodySchema = z.object({
 export async function POST(request: Request) {
   try {
     const body = bodySchema.parse(await request.json());
-    const result = scoreAssessment(body.sessionId, body.answers);
     const storage = await getStorage();
 
     await requireUserAuth(request, storage, body.username);
+    const user = await storage.getUser(body.username);
+    if (!user) {
+      throw new Error("User not found");
+    }
+    const result = scoreAssessment(body.sessionId, body.answers, getAssessmentBank(user.learningGoal));
     await storage.saveAssessmentResult(body.username, result);
 
     const state = await storage.getUserState(body.username);

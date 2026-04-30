@@ -13,10 +13,14 @@ const bodySchema = z.object({
 export async function POST(request: Request) {
   try {
     const { username } = bodySchema.parse(await request.json());
-    const assessment = startAssessmentSession();
     const storage = await getStorage();
 
     await requireUserAuth(request, storage, username);
+    const user = await storage.getUser(username);
+    if (!user) {
+      throw new Error("User not found");
+    }
+    const assessment = startAssessmentSession(user.learningGoal);
     await storage.startAssessment(username, assessment.sessionId);
 
     return ok({

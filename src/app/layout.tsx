@@ -4,7 +4,10 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Words Explore",
-  description: "Mobile English vocabulary learning MVP"
+  description: "Mobile English vocabulary learning MVP",
+  icons: {
+    icon: "/favicon.svg"
+  }
 };
 
 export const viewport: Viewport = {

@@ -1,3 +1,5 @@
+import type { LearningGoal } from "@/lib/learningGoals";
+
 export type WordAction = "learned" | "too_easy" | "learning";
 
 export type WordStatus = "new" | WordAction;
@@ -5,6 +7,7 @@ export type WordStatus = "new" | WordAction;
 export interface UserRow {
   username: string;
   createdAt: string;
+  learningGoal: LearningGoal;
   targetDifficulty: number | null;
   estimatedLevel: string | null;
   assessmentCompletedAt: string | null;
@@ -89,6 +92,7 @@ export interface UserState {
 }
 
 export interface LearningContext {
+  learningGoal: LearningGoal;
   targetDifficulty: number;
   estimatedLevel: string | null;
   learnedWords: string[];

@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { assessmentBank, scoreAssessment, startAssessmentSession } from "@/lib/assessment";
+import {
+  assessmentBank,
+  getAssessmentBank,
+  scoreAssessment,
+  startAssessmentSession
+} from "@/lib/assessment";
+import { learningGoalOptions } from "@/lib/learningGoals";
 
 describe("assessment", () => {
   it("starts a mixed 10 question assessment", () => {
@@ -8,6 +14,16 @@ describe("assessment", () => {
     expect(session.questions).toHaveLength(10);
     expect(session.questions.some((question) => question.difficulty <= 3)).toBe(true);
     expect(session.questions.some((question) => question.difficulty >= 7)).toBe(true);
+  });
+
+  it("uses a goal-specific question bank", () => {
+    for (const goal of learningGoalOptions) {
+      const session = startAssessmentSession(goal.id);
+      const bankIds = new Set(getAssessmentBank(goal.id).map((question) => question.id));
+
+      expect(session.questions).toHaveLength(10);
+      expect(session.questions.every((question) => bankIds.has(question.id))).toBe(true);
+    }
   });
 
   it("scores answers and estimates a target difficulty", () => {

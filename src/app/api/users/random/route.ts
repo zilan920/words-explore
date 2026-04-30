@@ -1,6 +1,8 @@
+import { z } from "zod";
 import { generateRandomUsername } from "@/lib/username";
 import { getStorage } from "@/lib/db/storage";
 import { fail, ok } from "@/lib/api";
+import { defaultLearningGoal, learningGoalIds } from "@/lib/learningGoals";
 import { serverConfig } from "@/lib/serverConfig";
 import {
   enforceRateLimit,
@@ -12,8 +14,13 @@ import {
 
 export const runtime = "nodejs";
 
+const bodySchema = z.object({
+  learningGoal: z.enum(learningGoalIds).default(defaultLearningGoal)
+});
+
 export async function POST(request: Request) {
   try {
+    const body = bodySchema.parse((await request.json().catch(() => ({}))) as unknown);
     const storage = await getStorage();
     await enforceRateLimit(storage, {
       key: rateLimitKey("users:random", getClientIp(request)),
@@ -28,7 +35,7 @@ export async function POST(request: Request) {
       const username = generateRandomUsername();
       const accessToken = generateAccessToken();
       try {
-        const user = await storage.createUser(username, hashAccessToken(accessToken));
+        const user = await storage.createUser(username, hashAccessToken(accessToken), body.learningGoal);
         const state = await storage.getUserState(username);
         return ok({ username, accessToken, user, state });
       } catch (error) {

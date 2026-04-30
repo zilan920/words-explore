@@ -1,4 +1,5 @@
 import { appConfig } from "@/lib/appConfig";
+import { getLearningGoalLabel } from "@/lib/learningGoals";
 import type { LearningContext } from "@/lib/types";
 
 export const WORD_DELIMITER = "<<<WORD_DONE>>>";
@@ -18,12 +19,14 @@ export function buildRecommendationPrompt(context: LearningContext): string {
     "- word 只能是英文单词、短语、空格或连字符，避免专有名词。",
     "",
     "筛选约束：",
+    "- 推荐词必须贴合学习目标对应的考试/场景词库，优先给该目标高频词。",
     "- 不要推荐“已学会词”和“太简单词”中的词。",
     "- “继续学习词”可以再次出现，但优先推荐同难度的新词。",
     "- 避免和“最近出现词”中近 30 个词重复。",
     "- 中文释义要简洁，英文例句要自然，中文例句要准确对应英文例句。",
     "",
     "学习者信息：",
+    `- 学习目标：${getLearningGoalLabel(context.learningGoal)}`,
     `- 估算等级：${context.estimatedLevel ?? "未完成初测"}`,
     `- 目标难度：${context.targetDifficulty}`,
     `- 已学会词：${formatWords(context.learnedWords)}`,

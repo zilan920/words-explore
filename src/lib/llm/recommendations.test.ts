@@ -4,6 +4,7 @@ import { buildRecommendationPrompt, WORD_DELIMITER } from "@/lib/llm/recommendat
 import {
   consumeDelimitedRecommendationWords,
   parseRecommendationText,
+  parseStreamingRecommendationTail,
   resolveLlmConfig,
   validateRecommendationWords
 } from "@/lib/llm/recommendations";
@@ -76,11 +77,36 @@ describe("recommendation validation", () => {
 
     expect(parseRecommendationText(content)).toHaveLength(appConfig.wordBatchSize);
   });
+
+  it("accepts a complete JSON array as a streaming tail before any word was emitted", () => {
+    const payload = Array.from({ length: appConfig.wordBatchSize }, (_, index) => ({
+      ...baseWord,
+      word: testWord(index)
+    }));
+
+    expect(parseStreamingRecommendationTail(JSON.stringify(payload), 0)).toHaveLength(
+      appConfig.wordBatchSize
+    );
+  });
+
+  it("accepts a wrapped recommendation object as a streaming tail before any word was emitted", () => {
+    const payload = {
+      words: Array.from({ length: appConfig.wordBatchSize }, (_, index) => ({
+        ...baseWord,
+        word: testWord(index)
+      }))
+    };
+
+    expect(parseStreamingRecommendationTail(JSON.stringify(payload), 0)).toHaveLength(
+      appConfig.wordBatchSize
+    );
+  });
 });
 
 describe("recommendation prompt", () => {
   it("uses plain text instructions with the streaming delimiter", () => {
     const prompt = buildRecommendationPrompt({
+      learningGoal: "ielts",
       targetDifficulty: 7,
       estimatedLevel: "B2",
       learnedWords: ["coherent"],
@@ -92,6 +118,7 @@ describe("recommendation prompt", () => {
     expect(prompt.trim().startsWith("{")).toBe(false);
     expect(prompt).toContain(WORD_DELIMITER);
     expect(prompt).toContain(`推荐下一批 ${appConfig.wordBatchSize} 个`);
+    expect(prompt).toContain("学习目标：雅思");
     expect(prompt).toContain("已学会词：coherent");
     expect(prompt).toContain("太简单词：simple");
   });
