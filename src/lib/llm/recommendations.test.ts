@@ -32,13 +32,17 @@ function testWord(index: number): string {
   return `word ${suffix}`;
 }
 
+function wordList(count = appConfig.wordBatchSize) {
+  return Array.from({ length: count }, (_, index) => ({
+    ...baseWord,
+    word: testWord(index)
+  }));
+}
+
 describe("recommendation validation", () => {
   it("accepts exactly the configured number of unique words", () => {
     const payload = {
-      words: Array.from({ length: appConfig.wordBatchSize }, (_, index) => ({
-        ...baseWord,
-        word: testWord(index)
-      }))
+      words: wordList()
     };
 
     expect(validateRecommendationWords(payload)).toHaveLength(appConfig.wordBatchSize);
@@ -68,21 +72,51 @@ describe("recommendation validation", () => {
   });
 
   it("accepts a full delimited LLM response", () => {
-    const content = Array.from({ length: appConfig.wordBatchSize }, (_, index) => ({
-      ...baseWord,
-      word: testWord(index)
-    }))
+    const content = wordList()
       .map((word) => `${JSON.stringify(word)}\n${WORD_DELIMITER}`)
       .join("\n");
 
     expect(parseRecommendationText(content)).toHaveLength(appConfig.wordBatchSize);
   });
 
+  it("accepts noisy markdown around a wrapped recommendation object", () => {
+    const content = [
+      "好的，下面是推荐：",
+      "```json",
+      JSON.stringify({ words: wordList() }, null, 2),
+      "```",
+      "以上。"
+    ].join("\n");
+
+    expect(parseRecommendationText(content).map((word) => word.word)).toEqual(
+      wordList().map((word) => word.word)
+    );
+  });
+
+  it("accepts standalone JSON objects without delimiters", () => {
+    const content = wordList()
+      .map((word, index) => `第 ${index + 1} 个：\n${JSON.stringify(word)}`)
+      .join("\n\n");
+
+    expect(parseRecommendationText(content)).toHaveLength(appConfig.wordBatchSize);
+  });
+
+  it("uses the first configured batch when the provider returns too many array items", () => {
+    expect(parseRecommendationText(JSON.stringify(wordList(appConfig.wordBatchSize + 2)))).toHaveLength(
+      appConfig.wordBatchSize
+    );
+  });
+
+  it("accepts prose around delimited JSON objects", () => {
+    const content = wordList()
+      .map((word) => `推荐如下：${JSON.stringify(word)}\n${WORD_DELIMITER}`)
+      .join("\n");
+
+    expect(parseRecommendationText(content)).toHaveLength(appConfig.wordBatchSize);
+  });
+
   it("accepts a complete JSON array as a streaming tail before any word was emitted", () => {
-    const payload = Array.from({ length: appConfig.wordBatchSize }, (_, index) => ({
-      ...baseWord,
-      word: testWord(index)
-    }));
+    const payload = wordList();
 
     expect(parseStreamingRecommendationTail(JSON.stringify(payload), 0)).toHaveLength(
       appConfig.wordBatchSize
@@ -111,10 +145,7 @@ describe("recommendation validation", () => {
 
   it("accepts a wrapped recommendation object as a streaming tail before any word was emitted", () => {
     const payload = {
-      words: Array.from({ length: appConfig.wordBatchSize }, (_, index) => ({
-        ...baseWord,
-        word: testWord(index)
-      }))
+      words: wordList()
     };
 
     expect(parseStreamingRecommendationTail(JSON.stringify(payload), 0)).toHaveLength(

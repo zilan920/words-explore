@@ -229,16 +229,15 @@ export function parseRecommendationText(content: string): RecommendationWordInpu
 
   if (stripped.includes(WORD_DELIMITER)) {
     const parsed = consumeDelimitedRecommendationWords(stripped);
-    const tail = normalizeJsonSegment(parsed.remainder);
-    const words =
-      tail.length > 0
-        ? [...parsed.words, validateRecommendationWord(JSON.parse(tail))]
-        : parsed.words;
+    const words = [
+      ...parsed.words,
+      ...parseStreamingRecommendationTail(parsed.remainder, parsed.words.length, parsed.words)
+    ];
 
     return validateRecommendationWords(words);
   }
 
-  return validateRecommendationWords(JSON.parse(stripped));
+  return validateRecommendationWords(parseRecommendationCandidates(stripped, wordBatchSize));
 }
 
 export function consumeDelimitedRecommendationWords(buffer: string): DelimitedRecommendationParseResult {
@@ -252,7 +251,10 @@ export function consumeDelimitedRecommendationWords(buffer: string): DelimitedRe
     remainder = remainder.slice(delimiterIndex + WORD_DELIMITER.length);
 
     if (segment.length > 0) {
-      words.push(validateRecommendationWord(JSON.parse(segment)));
+      const parsedWords = parseRecommendationCandidates(segment, 1);
+      if (parsedWords[0]) {
+        words.push(parsedWords[0]);
+      }
     }
 
     delimiterIndex = remainder.indexOf(WORD_DELIMITER);
@@ -471,13 +473,7 @@ export function parseStreamingRecommendationTail(
     return [];
   }
 
-  const parsed = JSON.parse(tail) as unknown;
-  const singleWord = recommendationWordSchema.safeParse(parsed);
-  if (singleWord.success) {
-    return [singleWord.data];
-  }
-
-  const tailWords = validatePartialRecommendationWords(parsed);
+  const tailWords = parseRecommendationCandidates(tail, wordBatchSize);
   if (existingWordCount <= 0) {
     return tailWords;
   }
@@ -502,24 +498,130 @@ function parseRecommendationPayload(value: unknown): RecommendationWordInput[] {
   return recommendationSchema.parse(value).words;
 }
 
-function validatePartialRecommendationWords(value: unknown): RecommendationWordInput[] {
+function parseRecommendationCandidates(content: string, maxWords: number): RecommendationWordInput[] {
+  const direct = parseRecommendationPayloadLoose(parseJsonSegment(content), maxWords);
+  if (direct.length > 0) {
+    return direct;
+  }
+
+  const words: RecommendationWordInput[] = [];
+  const seen = new Set<string>();
+
+  for (const candidate of extractJsonCandidates(content)) {
+    for (const word of parseRecommendationPayloadLoose(candidate, maxWords)) {
+      const key = word.word.toLowerCase();
+      if (!seen.has(key)) {
+        words.push(word);
+        seen.add(key);
+      }
+
+      if (words.length >= maxWords) {
+        return words;
+      }
+    }
+  }
+
+  if (words.length > 0) {
+    return words;
+  }
+
+  throw new Error("No valid recommendation JSON found");
+}
+
+function parseRecommendationPayloadLoose(value: unknown, maxWords: number): RecommendationWordInput[] {
+  const singleWord = recommendationWordSchema.safeParse(value);
+  if (singleWord.success) {
+    return [singleWord.data];
+  }
+
   const wrapped = z.object({
-    words: z.array(recommendationWordSchema).min(1).max(wordBatchSize)
+    words: z.array(recommendationWordSchema).min(1)
   }).safeParse(value);
   const parsed = wrapped.success
     ? wrapped.data.words
-    : z.array(recommendationWordSchema).min(1).max(wordBatchSize).parse(value);
+    : z.array(recommendationWordSchema).min(1).safeParse(value).data;
+
+  if (!parsed) {
+    return [];
+  }
+
   const seen = new Set<string>();
+  const words: RecommendationWordInput[] = [];
 
   for (const word of parsed) {
     const key = word.word.toLowerCase();
-    if (seen.has(key)) {
-      throw new Error(`Duplicate recommendation word: ${word.word}`);
+    if (!seen.has(key)) {
+      words.push(word);
+      seen.add(key);
     }
-    seen.add(key);
   }
 
-  return parsed;
+  return words.slice(0, maxWords);
+}
+
+function parseJsonSegment(segment: string): unknown {
+  const normalized = normalizeJsonSegment(segment);
+
+  try {
+    return JSON.parse(normalized) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+function extractJsonCandidates(content: string): unknown[] {
+  const source = stripJsonFence(content);
+  const candidates: unknown[] = [];
+
+  for (let index = 0; index < source.length; index += 1) {
+    const open = source[index];
+    if (open !== "{" && open !== "[") {
+      continue;
+    }
+
+    const close = open === "{" ? "}" : "]";
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+
+    for (let cursor = index; cursor < source.length; cursor += 1) {
+      const char = source[cursor];
+
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+        } else if (char === "\\") {
+          escaped = true;
+        } else if (char === "\"") {
+          inString = false;
+        }
+        continue;
+      }
+
+      if (char === "\"") {
+        inString = true;
+        continue;
+      }
+
+      if (char === open) {
+        depth += 1;
+      } else if (char === close) {
+        depth -= 1;
+        if (depth === 0) {
+          const raw = source.slice(index, cursor + 1);
+          try {
+            candidates.push(JSON.parse(raw) as unknown);
+          } catch {
+            // Ignore malformed candidates and keep scanning.
+          }
+          index = cursor;
+          break;
+        }
+      }
+    }
+  }
+
+  return candidates;
 }
 
 function emitRecommendationWords(
