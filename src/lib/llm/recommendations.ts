@@ -358,7 +358,7 @@ async function callOpenAiCompatibleProviderStream(
       }
     }
 
-    for (const word of parseStreamingRecommendationTail(buffer, words.length)) {
+    for (const word of parseStreamingRecommendationTail(buffer, words.length, words)) {
       words.push(word);
       firstWordAt ??= Date.now();
       onEvent({
@@ -463,7 +463,8 @@ function normalizeJsonSegment(segment: string): string {
 
 export function parseStreamingRecommendationTail(
   buffer: string,
-  existingWordCount: number
+  existingWordCount: number,
+  existingWords: RecommendationWordInput[] = []
 ): RecommendationWordInput[] {
   const tail = normalizeJsonSegment(buffer);
   if (tail.length === 0) {
@@ -471,15 +472,20 @@ export function parseStreamingRecommendationTail(
   }
 
   const parsed = JSON.parse(tail) as unknown;
-  try {
-    return [validateRecommendationWord(parsed)];
-  } catch (error) {
-    if (existingWordCount > 0) {
-      throw error;
-    }
-
-    return validateRecommendationWords(parsed);
+  const singleWord = recommendationWordSchema.safeParse(parsed);
+  if (singleWord.success) {
+    return [singleWord.data];
   }
+
+  const tailWords = validatePartialRecommendationWords(parsed);
+  if (existingWordCount <= 0) {
+    return tailWords;
+  }
+
+  const seen = new Set(existingWords.map((word) => word.word.toLowerCase()));
+  return tailWords
+    .filter((word) => !seen.has(word.word.toLowerCase()))
+    .slice(0, Math.max(0, wordBatchSize - existingWordCount));
 }
 
 function parseRecommendationPayload(value: unknown): RecommendationWordInput[] {
@@ -494,6 +500,26 @@ function parseRecommendationPayload(value: unknown): RecommendationWordInput[] {
   }
 
   return recommendationSchema.parse(value).words;
+}
+
+function validatePartialRecommendationWords(value: unknown): RecommendationWordInput[] {
+  const wrapped = z.object({
+    words: z.array(recommendationWordSchema).min(1).max(wordBatchSize)
+  }).safeParse(value);
+  const parsed = wrapped.success
+    ? wrapped.data.words
+    : z.array(recommendationWordSchema).min(1).max(wordBatchSize).parse(value);
+  const seen = new Set<string>();
+
+  for (const word of parsed) {
+    const key = word.word.toLowerCase();
+    if (seen.has(key)) {
+      throw new Error(`Duplicate recommendation word: ${word.word}`);
+    }
+    seen.add(key);
+  }
+
+  return parsed;
 }
 
 function emitRecommendationWords(

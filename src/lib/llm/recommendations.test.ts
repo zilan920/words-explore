@@ -89,6 +89,26 @@ describe("recommendation validation", () => {
     );
   });
 
+  it("accepts a JSON array tail after some delimited words were emitted", () => {
+    const emitted = [{ ...baseWord, word: "word emitted" }];
+    const payload = [
+      ...emitted,
+      ...Array.from({ length: appConfig.wordBatchSize - 1 }, (_, index) => ({
+        ...baseWord,
+        word: testWord(index)
+      }))
+    ];
+
+    const parsed = parseStreamingRecommendationTail(
+      JSON.stringify(payload),
+      emitted.length,
+      emitted
+    );
+
+    expect(parsed).toHaveLength(appConfig.wordBatchSize - emitted.length);
+    expect(parsed.some((word) => word.word === emitted[0].word)).toBe(false);
+  });
+
   it("accepts a wrapped recommendation object as a streaming tail before any word was emitted", () => {
     const payload = {
       words: Array.from({ length: appConfig.wordBatchSize }, (_, index) => ({

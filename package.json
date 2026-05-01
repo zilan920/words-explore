@@ -10,6 +10,8 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "db:reset": "node scripts/reset-db.mjs",
+    "db:reset:dry-run": "node scripts/reset-db.mjs --dry-run",
     "llm:latency": "node scripts/deepseek-latency.mjs"
   },
   "dependencies": {
