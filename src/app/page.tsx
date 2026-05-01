@@ -4,23 +4,31 @@ import type { ChangeEvent, ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowRight,
+  BookOpenCheck,
+  Brain,
   ChevronDown,
   ChevronUp,
   CheckCircle2,
   CircleStop,
+  Database,
   Download,
+  Gauge,
   History,
+  ListChecks,
   Loader2,
   PencilLine,
   RotateCcw,
   Settings,
+  ShieldCheck,
   Sparkles,
+  Target,
   TrendingUp,
   Upload,
   UserRound
 } from "lucide-react";
 import { appConfig } from "@/lib/appConfig";
 import {
+  getLearningGoalShortLabel,
   learningGoalOptions,
   type LearningGoal
 } from "@/lib/learningGoals";
@@ -746,29 +754,50 @@ export default function Home() {
 
   return (
     <main className="mobile-shell flex flex-col">
-      <header className="safe-pad sticky top-0 z-10 border-b border-black/5 bg-[#fbfcfc]/95 py-2 backdrop-blur">
-        {username ? (
-          <div className="flex min-h-8 items-center gap-2 text-sm text-steel">
-            <UserRound size={15} aria-hidden />
-            <span className="truncate font-black text-ink">{username}</span>
+      <header className="safe-pad sticky top-0 z-10 bg-mist/90 py-3 backdrop-blur-xl">
+        {username && state ? (
+          <div className="control-card flex min-h-[60px] items-center gap-3 px-3 py-2 shadow-press">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-iris text-white">
+              <BookOpenCheck size={21} aria-hidden />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-[11px] font-black uppercase tracking-normal text-steel">Words Explore</p>
+              <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-sm font-black text-ink">
+                <UserRound className="shrink-0 text-leaf" size={15} aria-hidden />
+                <span className="truncate">{username}</span>
+              </div>
+            </div>
+            <div className="flex shrink-0 flex-col items-end gap-1">
+              <span className="rounded-md bg-lilac px-2 py-1 text-[11px] font-black text-iris">
+                {getLearningGoalShortLabel(state.user.learningGoal)}
+              </span>
+              <span className="rounded-md bg-leaf/10 px-2 py-1 text-[11px] font-black text-leaf">
+                {state.user.estimatedLevel ?? "初测"}
+              </span>
+            </div>
           </div>
         ) : (
-          <div>
-            <p className="text-[11px] font-bold uppercase text-leaf">Words Explore</p>
-            <h1 className="text-lg font-black leading-tight text-ink">词汇探索</h1>
+          <div className="flex min-h-[60px] items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-iris text-white shadow-press">
+              <BookOpenCheck size={21} aria-hidden />
+            </div>
+            <div>
+              <p className="text-[11px] font-black uppercase tracking-normal text-steel">Words Explore</p>
+              <h1 className="text-xl font-black leading-tight text-ink">词汇探索</h1>
+            </div>
           </div>
         )}
       </header>
 
       {error ? (
         <div className="safe-pad mt-4">
-          <div className="rounded-lg border border-coral/30 bg-coral/10 px-3 py-2 text-sm font-semibold text-coral">
+          <div className="rounded-lg border border-coral/30 bg-coral/10 px-3 py-2 text-sm font-bold text-coral">
             {error}
           </div>
         </div>
       ) : null}
 
-      <section className="safe-pad flex-1 pb-24 pt-4">
+      <section className="safe-pad flex-1 pb-28 pt-3">
         {busy === "boot" ? (
           <CenteredLoader label="载入中" />
         ) : !username || !state ? (
@@ -817,10 +846,12 @@ export default function Home() {
       </section>
 
       {username ? (
-        <nav className="safe-pad fixed bottom-0 left-1/2 z-20 grid w-full max-w-[480px] -translate-x-1/2 grid-cols-3 border-t border-black/5 bg-white/95 py-2 backdrop-blur">
+        <nav className="safe-pad fixed bottom-0 left-1/2 z-20 w-full max-w-[520px] -translate-x-1/2 pb-[max(10px,env(safe-area-inset-bottom))] pt-2">
+          <div className="grid grid-cols-3 rounded-lg border border-line bg-white/95 p-1 shadow-soft backdrop-blur-xl">
           <TabButton active={tab === "study"} label="学习" icon={<Sparkles size={19} />} onClick={() => setTab("study")} />
           <TabButton active={tab === "history"} label="记录" icon={<History size={19} />} onClick={() => setTab("history")} />
           <TabButton active={tab === "settings"} label="设置" icon={<Settings size={19} />} onClick={() => setTab("settings")} />
+          </div>
         </nav>
       ) : null}
 
@@ -847,22 +878,40 @@ function CreateUser({
   onCreate: () => void;
 }) {
   return (
-    <div className="flex min-h-[52dvh] flex-col justify-center">
-      <div className="border-y border-black/10 py-6">
-        <h2 className="text-2xl font-black leading-tight text-ink">开始初测</h2>
-        <div className="mt-5">
-          <p className="text-sm font-black text-ink">学习目标</p>
-          <div className="mt-3 grid grid-cols-2 gap-2">
+    <div className="flex min-h-[calc(100dvh-150px)] flex-col justify-center gap-5">
+      <section className="surface-card overflow-hidden">
+        <div className="border-b border-line bg-lilac/70 px-5 py-4">
+          <div className="flex items-start gap-3">
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-iris text-white shadow-press">
+              <Brain size={22} aria-hidden />
+            </div>
+            <div>
+              <p className="text-xs font-black uppercase tracking-normal text-iris">10 题初测</p>
+              <h2 className="mt-1 text-2xl font-black leading-tight text-ink">先定位你的词汇区间</h2>
+            </div>
+          </div>
+        </div>
+
+        <div className="px-5 py-5">
+          <div className="grid grid-cols-3 gap-2">
+            <OnboardingSignal icon={<Target size={17} aria-hidden />} label="目标" value="可切换" />
+            <OnboardingSignal icon={<Gauge size={17} aria-hidden />} label="难度" value="自动估计" />
+            <OnboardingSignal icon={<ListChecks size={17} aria-hidden />} label="单词" value="分批推荐" />
+          </div>
+
+          <div className="mt-5">
+            <p className="text-sm font-black text-ink">学习目标</p>
+            <div className="mt-3 grid grid-cols-2 gap-2">
             {learningGoalOptions.map((goal) => {
               const active = selectedGoal === goal.id;
 
               return (
                 <button
                   key={goal.id}
-                  className={`min-h-[76px] rounded-lg border px-3 py-3 text-left transition ${
+                  className={`min-h-[82px] cursor-pointer rounded-lg border px-3 py-3 text-left transition duration-200 ${
                     active
-                      ? "border-leaf bg-leaf/10 text-leaf"
-                      : "border-black/10 bg-white text-ink"
+                      ? "border-iris bg-lilac text-iris shadow-press"
+                      : "border-line bg-white text-ink hover:border-iris/35 hover:bg-lilac/40"
                   }`}
                   disabled={busy}
                   onClick={() => onGoalChange(goal.id)}
@@ -874,17 +923,39 @@ function CreateUser({
                 </button>
               );
             })}
+            </div>
           </div>
+
+          <button
+            className="button-base mt-6 w-full bg-leaf px-4 text-white shadow-press"
+            disabled={busy}
+            onClick={onCreate}
+          >
+            {busy ? <Loader2 className="animate-spin" size={20} aria-hidden /> : <ArrowRight size={20} aria-hidden />}
+            开始
+          </button>
         </div>
-        <button
-          className="button-base mt-8 w-full bg-leaf px-4 text-white"
-          disabled={busy}
-          onClick={onCreate}
-        >
-          {busy ? <Loader2 className="animate-spin" size={20} aria-hidden /> : <ArrowRight size={20} aria-hidden />}
-          开始
-        </button>
+      </section>
+    </div>
+  );
+}
+
+function OnboardingSignal({
+  icon,
+  label,
+  value
+}: {
+  icon: ReactNode;
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="rounded-lg border border-line bg-paper px-2.5 py-3 text-center">
+      <div className="mx-auto flex h-8 w-8 items-center justify-center rounded-lg bg-leaf/10 text-leaf">
+        {icon}
       </div>
+      <p className="mt-2 text-[11px] font-black text-steel">{label}</p>
+      <p className="mt-0.5 truncate text-xs font-black text-ink">{value}</p>
     </div>
   );
 }
@@ -966,11 +1037,21 @@ function StudyView({
 
   if (!state.user.assessmentCompletedAt && !assessment) {
     return (
-      <div className="rounded-lg border border-black/10 bg-white p-5 shadow-soft">
-        <p className="text-sm font-bold text-amber">10 题初测</p>
-        <h2 className="mt-2 text-2xl font-black text-ink">先定位词汇难度</h2>
+      <div className="surface-card p-5">
+        <div className="flex items-start gap-3">
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-amber/15 text-amber">
+            <Gauge size={22} aria-hidden />
+          </div>
+          <div>
+            <p className="text-sm font-black text-amber">10 题初测</p>
+            <h2 className="mt-1 text-2xl font-black leading-tight text-ink">先定位词汇难度</h2>
+            <p className="mt-2 text-sm font-semibold leading-6 text-steel">
+              完成后会生成贴近当前水平的第一批单词。
+            </p>
+          </div>
+        </div>
         <button
-          className="button-base mt-6 w-full bg-ink px-4 text-white"
+          className="button-base mt-6 w-full bg-ink px-4 text-white shadow-press"
           disabled={busy === "assessment"}
           onClick={onStartAssessment}
         >
@@ -988,26 +1069,30 @@ function StudyView({
   if (assessment && currentQuestion) {
     const picked = answers[currentQuestion.id];
     const isLast = questionIndex === assessment.questions.length - 1;
+    const progress = `${((questionIndex + 1) / assessment.questions.length) * 100}%`;
 
     return (
-      <div className="rounded-lg border border-black/10 bg-white p-5 shadow-soft">
+      <div className="surface-card p-5">
         <div className="flex items-center justify-between">
-          <span className="text-sm font-bold text-steel">
+          <span className="text-sm font-black text-steel">
             {questionIndex + 1} / {assessment.questions.length}
           </span>
           <span className="rounded-md bg-amber/15 px-2 py-1 text-xs font-black text-amber">
             难度 {currentQuestion.difficulty}
           </span>
         </div>
-        <h2 className="mt-5 text-4xl font-black text-ink">{currentQuestion.word}</h2>
+        <div className="mt-3 h-2 overflow-hidden rounded-full bg-line">
+          <div className="h-full rounded-full bg-iris transition-[width] duration-300 ease-out" style={{ width: progress }} />
+        </div>
+        <h2 className="mt-6 break-words text-4xl font-black leading-tight text-ink">{currentQuestion.word}</h2>
         <div className="mt-6 grid gap-3">
           {[...currentQuestion.options, unknownAnswer].map((option) => (
             <button
               key={option}
-              className={`min-h-12 rounded-lg border px-4 text-left text-base font-bold transition ${
+              className={`min-h-12 cursor-pointer rounded-lg border px-4 text-left text-base font-bold transition duration-200 ${
                 picked === option
-                  ? "border-leaf bg-leaf/10 text-leaf"
-                  : "border-black/10 bg-mist text-ink"
+                  ? "border-iris bg-lilac text-iris shadow-press"
+                  : "border-line bg-white text-ink hover:border-iris/35 hover:bg-lilac/40"
               }`}
               onClick={() => onPickAnswer(currentQuestion.id, option)}
             >
@@ -1016,7 +1101,7 @@ function StudyView({
           ))}
         </div>
         <button
-          className="button-base mt-6 w-full bg-leaf px-4 text-white"
+          className="button-base mt-6 w-full bg-leaf px-4 text-white shadow-press"
           disabled={!picked || busy === "submit"}
           onClick={onNextQuestion}
         >
@@ -1045,12 +1130,19 @@ function StudyView({
 
   if (displayedWords.length === 0) {
     return (
-      <div className="rounded-lg border border-black/10 bg-white p-5 shadow-soft">
-        <p className="text-sm font-bold text-leaf">等级 {state.user.estimatedLevel}</p>
-        <h2 className="mt-2 text-2xl font-black text-ink">生成下一批单词</h2>
+      <div className="surface-card p-5">
+        <div className="flex items-start gap-3">
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-leaf/10 text-leaf">
+            <Sparkles size={22} aria-hidden />
+          </div>
+          <div>
+            <p className="text-sm font-black text-leaf">等级 {state.user.estimatedLevel}</p>
+            <h2 className="mt-1 text-2xl font-black leading-tight text-ink">生成下一批单词</h2>
+          </div>
+        </div>
         {isGenerating ? <GenerationStatus thinking={llmThinking} count={streamWords.length} /> : null}
         <button
-          className="button-base mt-6 w-full bg-leaf px-4 text-white"
+          className="button-base mt-6 w-full bg-leaf px-4 text-white shadow-press"
           disabled={isGenerating}
           onClick={() => onGenerate()}
         >
@@ -1068,13 +1160,13 @@ function StudyView({
   return (
     <div className={allWordCardsCollapsed ? "space-y-2" : "space-y-4"}>
       {allWordCardsCollapsed ? null : (
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-3 gap-2.5">
           <Metric label="已学会" value={state.stats.learned} tone="leaf" />
           <Metric label="太简单" value={state.stats.tooEasy} tone="amber" />
           <Metric label="继续学" value={state.stats.learning} tone="steel" />
         </div>
       )}
-      <div className={`flex items-center justify-between gap-3 ${allWordCardsCollapsed ? "min-h-9" : ""}`}>
+      <div className={`control-card flex items-center justify-between gap-3 px-3 py-3 ${allWordCardsCollapsed ? "min-h-9" : ""}`}>
         <div>
           <p className={allWordCardsCollapsed ? "text-xs font-bold text-steel" : "text-sm font-bold text-steel"}>
             学习列表
@@ -1084,7 +1176,7 @@ function StudyView({
           </h2>
         </div>
         <button
-          className="button-base bg-ink px-3 text-sm text-white"
+          className="button-base bg-ink px-3 text-sm text-white shadow-press"
           disabled={isGenerating}
           onClick={() => onGenerate({ replaceCurrent: true })}
         >
@@ -1134,19 +1226,26 @@ function ResultPanel({
   const levelSummary = getEstimatedLevelSummary(result.estimatedLevel, result.targetDifficulty);
 
   return (
-    <div className="rounded-lg border border-black/10 bg-white p-5 shadow-soft">
-      <p className="text-sm font-bold text-leaf">初测完成</p>
-      <div className="mt-3 rounded-lg bg-leaf/10 px-3 py-3 text-sm leading-6 text-ink">
-        <p className="font-black">你的大概程度：{result.estimatedLevel}</p>
+    <div className="surface-card p-5">
+      <div className="flex items-start gap-3">
+        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-leaf/10 text-leaf">
+          <ShieldCheck size={22} aria-hidden />
+        </div>
+        <div>
+          <p className="text-sm font-black text-leaf">初测完成</p>
+          <h2 className="mt-1 text-2xl font-black leading-tight text-ink">你的大概程度：{result.estimatedLevel}</h2>
+        </div>
+      </div>
+      <div className="mt-4 rounded-lg border border-leaf/20 bg-leaf/10 px-3 py-3 text-sm leading-6 text-ink">
         <p className="mt-1 font-semibold text-steel">{levelSummary}</p>
       </div>
-      <div className="mt-4 grid grid-cols-3 gap-3">
+      <div className="mt-4 grid grid-cols-3 gap-2.5">
         <Metric label="得分" value={result.score} tone="leaf" />
         <Metric label="等级" value={result.estimatedLevel} tone="steel" />
         <Metric label="目标" value={result.targetDifficulty} tone="amber" />
       </div>
       {busy ? <GenerationStatus thinking={llmThinking} count={streamCount} /> : null}
-      <button className="button-base mt-6 w-full bg-leaf px-4 text-white" disabled={busy} onClick={() => onGenerate()}>
+      <button className="button-base mt-6 w-full bg-leaf px-4 text-white shadow-press" disabled={busy} onClick={() => onGenerate()}>
         {busy ? <Loader2 className="animate-spin" size={20} aria-hidden /> : <Sparkles size={20} aria-hidden />}
         生成 {wordBatchSize} 个词
       </button>
@@ -1193,8 +1292,8 @@ function AutoNextCountdown({
   const progress = `${Math.min(100, Math.max(0, ((autoNextSeconds - remaining) / autoNextSeconds) * 100))}%`;
 
   return (
-    <div className="safe-pad fixed bottom-20 left-1/2 z-30 w-full max-w-[480px] -translate-x-1/2">
-      <div className="rounded-lg border border-black/10 bg-white p-3 shadow-soft">
+    <div className="safe-pad fixed bottom-24 left-1/2 z-30 w-full max-w-[520px] -translate-x-1/2">
+      <div className="surface-card p-3">
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
             <p className="text-sm font-black text-ink">{seconds} 秒后获取下一批单词</p>
@@ -1241,17 +1340,19 @@ function WordCard({
 
   return (
     <article
-      className={`border border-black/10 bg-white transition-[padding,box-shadow] duration-200 ${
-        collapsed ? "rounded-md px-2.5 py-2 shadow-none" : "rounded-lg p-4 shadow-soft"
+      className={`border bg-white transition-[padding,box-shadow,border-color] duration-200 ${
+        collapsed
+          ? "rounded-lg border-line px-3 py-2 shadow-none"
+          : "rounded-lg border-line p-4 shadow-soft"
       }`}
     >
       <button
-        className={`flex w-full justify-between gap-2 text-left ${collapsed ? "items-center" : "items-start"}`}
+        className={`flex w-full cursor-pointer justify-between gap-2 text-left ${collapsed ? "items-center" : "items-start"}`}
         aria-expanded={!collapsed}
         onClick={() => onCollapsedChange(!collapsed)}
       >
         <div className="min-w-0">
-          <h3 className={`${collapsed ? "truncate text-base" : "text-2xl"} font-black text-ink`}>{word.word}</h3>
+          <h3 className={`${collapsed ? "truncate text-base" : "break-words text-3xl leading-tight"} font-black text-ink`}>{word.word}</h3>
           <p className={`${collapsed ? "mt-0 truncate text-[11px]" : "mt-1 text-sm"} font-bold text-steel`}>
             {word.partOfSpeech} · 难度 {word.difficulty}
           </p>
@@ -1259,7 +1360,7 @@ function WordCard({
         <div className={`flex shrink-0 items-center ${compact ? "gap-1" : "gap-2"}`}>
           <StatusBadge status={word.status} compact={collapsed} />
           <span
-            className={`flex items-center justify-center rounded-md bg-black/5 text-steel ${
+            className={`flex items-center justify-center rounded-md bg-lilac text-iris ${
               collapsed ? "h-6 w-6" : "h-7 w-7"
             }`}
           >
@@ -1275,10 +1376,10 @@ function WordCard({
         inert={collapsed ? true : undefined}
       >
         <div className="overflow-hidden">
-          <p className="mt-4 text-lg font-black text-leaf">{word.definitionZh}</p>
-          <p className="mt-3 text-sm leading-6 text-ink">{word.exampleEn}</p>
-          <p className="mt-2 text-sm leading-6 text-steel">{word.exampleZh}</p>
-          <p className="mt-3 border-l-4 border-amber/60 pl-3 text-sm font-semibold leading-6 text-steel">
+          <p className="mt-4 rounded-lg border border-leaf/20 bg-leaf/10 px-3 py-2 text-lg font-black leading-7 text-leaf">{word.definitionZh}</p>
+          <p className="mt-3 rounded-lg bg-mist px-3 py-3 text-sm font-semibold leading-6 text-ink">{word.exampleEn}</p>
+          <p className="mt-2 px-1 text-sm font-semibold leading-6 text-steel">{word.exampleZh}</p>
+          <p className="mt-3 border-l-4 border-amber/60 bg-amber/10 px-3 py-2 text-sm font-semibold leading-6 text-steel">
             {word.difficultyReason}
           </p>
           <div className="mt-4 grid grid-cols-3 gap-2">
@@ -1330,7 +1431,15 @@ function HistoryView({
 
   return (
     <div className="space-y-5">
-      <h2 className="text-2xl font-black text-ink">学习记录</h2>
+      <div className="control-card flex items-center justify-between px-3 py-3">
+        <div>
+          <p className="text-sm font-bold text-steel">学习记录</p>
+          <h2 className="text-2xl font-black text-ink">{words.length} 个词</h2>
+        </div>
+        <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-lilac text-iris">
+          <History size={22} aria-hidden />
+        </div>
+      </div>
       <HistorySection
         title="继续学生词本"
         words={learning}
@@ -1367,10 +1476,10 @@ function HistorySection({
     <section>
       <div className="mb-3 flex items-center justify-between">
         <h3 className="text-lg font-black text-ink">{title}</h3>
-        <span className="rounded-md bg-black/5 px-2 py-1 text-xs font-black text-steel">{words.length}</span>
+        <span className="rounded-md bg-lilac px-2 py-1 text-xs font-black text-iris">{words.length}</span>
       </div>
       {words.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-black/10 bg-white px-4 py-5 text-sm font-semibold text-steel">
+        <div className="rounded-lg border border-dashed border-line bg-white/80 px-4 py-5 text-sm font-semibold text-steel">
           {emptyTitle}
         </div>
       ) : (
@@ -1402,7 +1511,7 @@ function HistoryWordRow({
   onAction?: (wordId: string) => void;
 }) {
   return (
-    <div className="rounded-lg border border-black/10 bg-white p-4">
+    <div className="rounded-lg border border-line bg-white p-4 shadow-[0_8px_20px_rgba(21,21,40,0.05)]">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="truncate text-lg font-black text-ink">{word.word}</p>
@@ -1412,7 +1521,7 @@ function HistoryWordRow({
       </div>
       {actionLabel && onAction ? (
         <button
-          className="button-base mt-3 w-full bg-leaf px-4 text-white"
+          className="button-base mt-3 w-full bg-leaf px-4 text-white shadow-press"
           disabled={busy}
           onClick={() => onAction(word.id)}
         >
@@ -1463,17 +1572,23 @@ function SettingsView({
 
   return (
     <div className="space-y-5">
-      <div>
-        <h2 className="text-2xl font-black text-ink">设置</h2>
+      <div className="control-card flex items-center justify-between px-3 py-3">
+        <div>
+          <p className="text-sm font-bold text-steel">账户与数据</p>
+          <h2 className="text-2xl font-black text-ink">设置</h2>
+        </div>
+        <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-lilac text-iris">
+          <Settings size={22} aria-hidden />
+        </div>
       </div>
 
-      <section className="space-y-3">
-        <div className="border-b border-black/10 pb-3">
+      <section className="surface-card space-y-4 p-4">
+        <div className="border-b border-line pb-4">
           <div className="min-w-0">
             <p className="text-xs font-black text-steel">用户 ID</p>
             <div className="mt-2 flex gap-2">
               <input
-                className="min-h-10 min-w-0 flex-1 rounded-lg border border-black/10 bg-white px-3 text-sm font-black text-ink outline-none transition focus:border-leaf"
+                className="min-h-11 min-w-0 flex-1 rounded-lg border border-line bg-white px-3 text-sm font-black text-ink outline-none transition focus:border-iris"
                 value={usernameDraft}
                 autoCapitalize="none"
                 autoCorrect="off"
@@ -1483,7 +1598,7 @@ function SettingsView({
                 onChange={(event) => setUsernameDraft(event.target.value)}
               />
               <button
-                className="button-base min-h-10 shrink-0 border border-black/10 bg-white px-3 text-sm text-ink"
+                className="button-base min-h-11 shrink-0 border border-line bg-white px-3 text-sm text-ink"
                 disabled={busy === "rename" || !usernameChanged}
                 onClick={() => onRename(usernameDraft)}
               >
@@ -1509,10 +1624,10 @@ function SettingsView({
               return (
                 <button
                   key={goal.id}
-                  className={`min-h-14 rounded-lg border px-3 py-2 text-left transition ${
+                  className={`min-h-14 cursor-pointer rounded-lg border px-3 py-2 text-left transition duration-200 ${
                     active
-                      ? "border-leaf bg-leaf/10 text-leaf"
-                      : "border-black/10 bg-white text-ink"
+                      ? "border-iris bg-lilac text-iris shadow-press"
+                      : "border-line bg-white text-ink hover:border-iris/35 hover:bg-lilac/40"
                   }`}
                   disabled={active || busy?.startsWith("goal:")}
                   onClick={() => onLearningGoalChange(goal.id)}
@@ -1537,7 +1652,7 @@ function SettingsView({
             </p>
             <div className="mt-3 grid grid-cols-2 gap-2">
               <button
-                className="button-base border border-black/10 bg-white px-3 text-sm text-ink"
+                className="button-base border border-line bg-white px-3 text-sm text-ink"
                 disabled={busy === "reset"}
                 onClick={() => setConfirmingReset(false)}
               >
@@ -1576,13 +1691,13 @@ function SettingsView({
         )}
       </section>
 
-      <section className="space-y-3">
-        <div className="grid grid-cols-2 gap-3">
+      <section className="surface-card space-y-3 p-4">
+        <div className="grid grid-cols-2 gap-2.5">
           <Metric label="单词" value={state.stats.totalWords} tone="steel" />
           <Metric label="等级" value={state.user.estimatedLevel ?? "-"} tone="leaf" />
         </div>
         <button
-          className="button-base w-full bg-ink px-4 text-white"
+          className="button-base w-full bg-ink px-4 text-white shadow-press"
           disabled={busy === "export"}
           onClick={onExport}
         >
@@ -1594,7 +1709,7 @@ function SettingsView({
           导出数据库
         </button>
         <button
-          className="button-base w-full border border-black/10 bg-white px-4 text-ink"
+          className="button-base w-full border border-line bg-white px-4 text-ink"
           disabled={busy === "import"}
           onClick={onImport}
         >
@@ -1621,12 +1736,12 @@ function Metric({
 }) {
   const toneClass =
     tone === "leaf"
-      ? "text-leaf bg-leaf/10"
+      ? "border-leaf/20 bg-leaf/10 text-leaf"
       : tone === "amber"
-        ? "text-amber bg-amber/15"
-        : "text-steel bg-steel/10";
+        ? "border-amber/25 bg-amber/15 text-amber"
+        : "border-steel/15 bg-white text-steel";
   return (
-    <div className={`min-h-20 rounded-lg px-3 py-3 ${toneClass}`}>
+    <div className={`min-h-20 rounded-lg border px-3 py-3 shadow-[0_8px_20px_rgba(21,21,40,0.04)] ${toneClass}`}>
       <p className="text-xs font-black">{label}</p>
       <p className="mt-2 truncate text-2xl font-black">{value}</p>
     </div>
@@ -1648,8 +1763,8 @@ function StatusBadge({
       : status === "too_easy"
         ? "bg-amber/15 text-amber"
         : status === "learning"
-          ? "bg-steel/10 text-steel"
-          : "bg-black/5 text-ink";
+          ? "bg-lilac text-iris"
+          : "bg-mist text-ink";
 
   return (
     <span
@@ -1676,7 +1791,7 @@ function ActionButton({
   return (
     <button
       className={`button-base min-w-0 px-2 text-sm ${
-        active ? "bg-leaf text-white" : "border border-black/10 bg-mist text-ink"
+        active ? "bg-leaf text-white shadow-press" : "border border-line bg-mist text-ink"
       }`}
       disabled={disabled}
       onClick={onClick}
@@ -1700,8 +1815,8 @@ function TabButton({
 }) {
   return (
     <button
-      className={`mx-1 flex min-h-12 flex-col items-center justify-center rounded-lg text-xs font-black ${
-        active ? "bg-leaf/10 text-leaf" : "text-steel"
+      className={`flex min-h-12 cursor-pointer flex-col items-center justify-center rounded-lg text-xs font-black transition duration-200 ${
+        active ? "bg-lilac text-iris shadow-[inset_0_-2px_0_rgba(79,70,229,0.12)]" : "text-steel hover:bg-mist"
       }`}
       onClick={onClick}
     >
@@ -1722,8 +1837,11 @@ function CenteredLoader({ label }: { label: string }) {
 
 function EmptyState({ title }: { title: string }) {
   return (
-    <div className="rounded-lg border border-dashed border-black/15 bg-white p-8 text-center">
-      <p className="font-black text-steel">{title}</p>
+    <div className="surface-card p-8 text-center">
+      <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-lg bg-lilac text-iris">
+        <Database size={22} aria-hidden />
+      </div>
+      <p className="mt-3 font-black text-steel">{title}</p>
     </div>
   );
 }

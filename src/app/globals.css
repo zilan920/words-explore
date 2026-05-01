@@ -4,8 +4,8 @@
 
 :root {
   color-scheme: light;
-  --background: #f5f7f8;
-  --foreground: #17202a;
+  --background: #f7f8fc;
+  --foreground: #151528;
 }
 
 * {
@@ -20,7 +20,9 @@ body {
 body {
   margin: 0;
   background:
-    linear-gradient(180deg, rgba(31, 138, 112, 0.08), transparent 220px),
+    linear-gradient(135deg, rgba(79, 70, 229, 0.10), transparent 280px),
+    linear-gradient(225deg, rgba(22, 134, 109, 0.10), transparent 320px),
+    linear-gradient(180deg, rgba(183, 121, 31, 0.08), transparent 520px),
     var(--background);
   color: var(--foreground);
   font-family:
@@ -39,16 +41,20 @@ button {
 }
 
 .mobile-shell {
-  width: min(100%, 480px);
+  position: relative;
+  width: min(100%, 520px);
   min-height: 100dvh;
   margin: 0 auto;
-  background: #fbfcfc;
-  box-shadow: 0 0 60px rgba(23, 32, 42, 0.08);
+  overflow-x: hidden;
+  background:
+    linear-gradient(180deg, rgba(255, 253, 248, 0.96), rgba(247, 248, 252, 0.98) 48%),
+    #f7f8fc;
+  box-shadow: 0 0 72px rgba(21, 21, 40, 0.10);
 }
 
 .safe-pad {
-  padding-left: max(18px, env(safe-area-inset-left));
-  padding-right: max(18px, env(safe-area-inset-right));
+  padding-left: max(20px, env(safe-area-inset-left));
+  padding-right: max(20px, env(safe-area-inset-right));
 }
 
 .button-base {
@@ -59,10 +65,18 @@ button {
   align-items: center;
   justify-content: center;
   gap: 8px;
+  cursor: pointer;
   transition:
     transform 160ms ease,
     opacity 160ms ease,
-    background 160ms ease;
+    background 160ms ease,
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    color 160ms ease;
+}
+
+.button-base:hover:not(:disabled) {
+  box-shadow: 0 10px 20px rgba(21, 21, 40, 0.08);
 }
 
 .button-base:active {
@@ -70,6 +84,38 @@ button {
 }
 
 .button-base:disabled {
+  cursor: not-allowed;
   opacity: 0.48;
   transform: none;
+}
+
+.button-base:focus-visible,
+button:focus-visible,
+input:focus-visible {
+  outline: 3px solid rgba(79, 70, 229, 0.24);
+  outline-offset: 3px;
+}
+
+.surface-card {
+  border: 1px solid #e2e7f0;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow: 0 14px 38px rgba(21, 21, 40, 0.10);
+}
+
+.control-card {
+  border: 1px solid #e2e7f0;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.92);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
 }
