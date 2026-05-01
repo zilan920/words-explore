@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { appConfig } from "@/lib/appConfig";
 import { buildRecommendationPrompt, WORD_DELIMITER } from "@/lib/llm/recommendationPrompt";
 import {
@@ -275,6 +275,39 @@ describe("LLM provider config", () => {
     });
   });
 
+  it("allows DEEPSEEK_TEMPERATURE to override DeepSeek temperature", () => {
+    expect(
+      resolveLlmConfig({
+        DEEPSEEK_API_KEY: "deepseek-key",
+        LLM_TEMPERATURE: "0.9",
+        DEEPSEEK_TEMPERATURE: "0.4"
+      })?.temperature
+    ).toBe(0.4);
+  });
+
+  it("allows LLM_TEMPERATURE to override DeepSeek temperature when provider-specific value is missing", () => {
+    expect(
+      resolveLlmConfig({
+        DEEPSEEK_API_KEY: "deepseek-key",
+        LLM_TEMPERATURE: "0.6"
+      })?.temperature
+    ).toBe(0.6);
+  });
+
+  it("keeps the TypeScript default when temperature env is invalid", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      expect(
+        resolveLlmConfig({
+          DEEPSEEK_API_KEY: "deepseek-key",
+          DEEPSEEK_TEMPERATURE: "hot"
+        })?.temperature
+      ).toBe(serverConfig.llm.deepseek.temperature);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("keeps the generic OpenAI-compatible path for other providers", () => {
     const config: ServerLlmConfig = {
       ...serverConfig.llm,
@@ -303,6 +336,28 @@ describe("LLM provider config", () => {
       temperature: 1.1,
       thinking: null
     });
+  });
+
+  it("allows LLM_TEMPERATURE to override OpenAI-compatible temperature", () => {
+    const config: ServerLlmConfig = {
+      ...serverConfig.llm,
+      provider: "openai-compatible",
+      openAiCompatible: {
+        baseUrl: "https://provider.example.com/v1/",
+        model: "provider-model",
+        timeoutMs: 7000,
+        maxTokens: 1000,
+        temperature: 1.1,
+        thinking: null
+      }
+    };
+
+    expect(
+      resolveLlmConfig({
+        LLM_API_KEY: "generic-key",
+        LLM_TEMPERATURE: "0.5"
+      }, config)?.temperature
+    ).toBe(0.5);
   });
 
   it("returns null without a usable API key", () => {

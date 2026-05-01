@@ -213,7 +213,10 @@ export function resolveLlmConfig(
       model: providerConfig.model,
       timeoutMs: providerConfig.timeoutMs,
       maxTokens: providerConfig.maxTokens,
-      temperature: providerConfig.temperature,
+      temperature: resolveTemperature(env, providerConfig.temperature, [
+        "DEEPSEEK_TEMPERATURE",
+        "LLM_TEMPERATURE"
+      ]),
       thinking: providerConfig.thinking
     };
   }
@@ -231,7 +234,7 @@ export function resolveLlmConfig(
     model: providerConfig.model,
     timeoutMs: providerConfig.timeoutMs,
     maxTokens: providerConfig.maxTokens,
-    temperature: providerConfig.temperature,
+    temperature: resolveTemperature(env, providerConfig.temperature, ["LLM_TEMPERATURE"]),
     thinking: providerConfig.thinking
   };
 }
@@ -818,6 +821,29 @@ function normalizeBaseUrl(baseUrl: string): string {
 
 function normalizeEnvValue(value: string): string {
   return value.trim();
+}
+
+function resolveTemperature(
+  env: Record<string, string | undefined>,
+  defaultTemperature: number,
+  keys: string[]
+): number {
+  const raw = keys.map((key) => env[key]?.trim()).find((value) => value);
+  if (!raw) {
+    return defaultTemperature;
+  }
+
+  const parsed = Number(raw);
+  if (Number.isFinite(parsed) && parsed >= 0 && parsed <= 2) {
+    return parsed;
+  }
+
+  console.warn("[llm] invalid temperature env; using TypeScript config default", {
+    keys,
+    value: raw,
+    defaultTemperature
+  });
+  return defaultTemperature;
 }
 
 function sanitizeProviderError(detail: string): string {
