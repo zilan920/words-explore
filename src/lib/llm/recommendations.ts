@@ -713,14 +713,35 @@ function diagnosticSnippet(content: string, side: "first" | "last"): string | nu
     : `...${normalized.slice(-diagnosticSnippetLength)}`;
 }
 
+const missingCommaBeforeRecommendationKeyPattern =
+  /((?:"(?:\\.|[^"\\])*"|\d+(?:\.\d+)?|true|false|null|[}\]])\s+)(?="(?:word|partOfSpeech|definitionZh|exampleEn|exampleZh|difficultyReason|difficulty|words)"\s*:)/g;
+
 function parseJsonSegment(segment: string): unknown {
   const normalized = normalizeJsonSegment(segment);
+  return parseJsonWithRecommendationRepair(normalized);
+}
 
+function parseJsonWithRecommendationRepair(content: string): unknown {
   try {
-    return JSON.parse(normalized) as unknown;
+    return JSON.parse(content) as unknown;
   } catch {
-    return null;
+    const repaired = repairMissingCommasBeforeRecommendationKeys(content);
+    if (repaired === content) {
+      return null;
+    }
+
+    try {
+      return JSON.parse(repaired) as unknown;
+    } catch {
+      return null;
+    }
   }
+}
+
+function repairMissingCommasBeforeRecommendationKeys(content: string): string {
+  return content.replace(missingCommaBeforeRecommendationKeyPattern, (match) => {
+    return `${match.trimEnd()}, `;
+  });
 }
 
 function extractJsonCandidates(content: string): unknown[] {
@@ -763,10 +784,9 @@ function extractJsonCandidates(content: string): unknown[] {
         depth -= 1;
         if (depth === 0) {
           const raw = source.slice(index, cursor + 1);
-          try {
-            candidates.push(JSON.parse(raw) as unknown);
-          } catch {
-            // Ignore malformed candidates and keep scanning.
+          const parsed = parseJsonWithRecommendationRepair(raw);
+          if (parsed !== null) {
+            candidates.push(parsed);
           }
           index = cursor;
           break;

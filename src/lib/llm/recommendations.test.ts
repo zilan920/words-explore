@@ -124,6 +124,21 @@ describe("recommendation validation", () => {
     expect(parsed[0].difficulty).toBe(7);
   });
 
+  it("repairs a missing comma before a known recommendation field", () => {
+    const words = wordList();
+    const malformedFirstWord = JSON.stringify(words[0]).replace(
+      ',"exampleEn"',
+      ' "exampleEn"'
+    );
+    const content = [malformedFirstWord, ...words.slice(1).map((word) => JSON.stringify(word))]
+      .map((wordJson) => `${wordJson}\n${WORD_DELIMITER}`)
+      .join("\n");
+
+    expect(parseRecommendationText(content).map((word) => word.word)).toEqual(
+      words.map((word) => word.word)
+    );
+  });
+
   it("accepts noisy markdown around a wrapped recommendation object", () => {
     const content = [
       "好的，下面是推荐：",
