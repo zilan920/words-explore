@@ -1,5 +1,6 @@
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import { usernameSchema, fail } from "@/lib/api";
+import { ApiError, usernameSchema, fail } from "@/lib/api";
 import { getStorage, type StorageAdapter } from "@/lib/db/storage";
 import { streamRecommendationWords, type RecommendationStreamEvent } from "@/lib/llm/recommendations";
 import { serverConfig } from "@/lib/serverConfig";
@@ -19,7 +20,8 @@ const bodySchema = z.object({
 });
 
 export async function POST(request: Request) {
-  let username: string;
+  const requestId = randomUUID();
+  let username = "";
   let storage!: StorageAdapter;
   let releaseLock!: () => Promise<void>;
 
@@ -47,7 +49,17 @@ export async function POST(request: Request) {
       rateLimitKey("recommendations:lock", username),
       serverConfig.security.recommendationRateLimit.lockTtlMs
     );
+    console.info("[api/recommendations/stream] accepted", {
+      requestId,
+      username
+    });
   } catch (error) {
+    console.warn("[api/recommendations/stream] rejected", {
+      requestId,
+      username: username || null,
+      status: error instanceof ApiError ? error.status : error instanceof z.ZodError ? 400 : null,
+      error: error instanceof Error ? error.message : String(error)
+    });
     return fail(error);
   }
 
@@ -62,6 +74,16 @@ export async function POST(request: Request) {
         try {
           const context = await storage.getLearningContext(username);
           let thinking = false;
+          console.info("[api/recommendations/stream] context loaded", {
+            requestId,
+            username,
+            learningGoal: context.learningGoal,
+            targetDifficulty: context.targetDifficulty,
+            learnedWords: context.learnedWords.length,
+            tooEasyWords: context.tooEasyWords.length,
+            learningWords: context.learningWords.length,
+            recentWords: context.recentWords.length
+          });
 
           const result = await streamRecommendationWords(context, (event: RecommendationStreamEvent) => {
             if (event.type === "start") {
@@ -81,6 +103,11 @@ export async function POST(request: Request) {
 
             if (event.type === "fallback") {
               thinking = false;
+              console.warn("[api/recommendations/stream] llm fallback", {
+                requestId,
+                username,
+                reason: event.reason
+              });
               send("fallback", { reason: event.reason });
               return;
             }
@@ -90,6 +117,13 @@ export async function POST(request: Request) {
               index: event.index,
               word: event.word
             });
+          }, { requestId });
+
+          console.info("[api/recommendations/stream] creating batch", {
+            requestId,
+            username,
+            source: result.source,
+            wordCount: result.words.length
           });
 
           const batch = await storage.createRecommendationBatch(
@@ -101,6 +135,7 @@ export async function POST(request: Request) {
           const state = await storage.getUserState(username);
 
           console.info("[api/recommendations/stream] completed", {
+            requestId,
             username,
             source: result.source,
             wordCount: batch.words.length,
@@ -118,6 +153,7 @@ export async function POST(request: Request) {
           controller.close();
         } catch (error) {
           console.warn("[api/recommendations/stream] failed", {
+            requestId,
             username,
             error: error instanceof Error ? error.message : String(error)
           });
@@ -128,6 +164,7 @@ export async function POST(request: Request) {
             await releaseLock();
           } catch (error) {
             console.warn("[api/recommendations/stream] release lock failed", {
+              requestId,
               username,
               error: error instanceof Error ? error.message : String(error)
             });

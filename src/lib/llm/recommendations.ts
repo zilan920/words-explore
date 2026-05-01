@@ -84,6 +84,10 @@ export interface LlmProviderConfig {
   thinking: "enabled" | "disabled" | null;
 }
 
+export interface RecommendationDiagnosticsOptions {
+  requestId?: string;
+}
+
 export async function recommendWords(context: LearningContext): Promise<RecommendationResult> {
   const config = resolveLlmConfig();
   if (!config) {
@@ -124,11 +128,14 @@ export async function recommendWords(context: LearningContext): Promise<Recommen
 
 export async function streamRecommendationWords(
   context: LearningContext,
-  onEvent: (event: RecommendationStreamEvent) => void
+  onEvent: (event: RecommendationStreamEvent) => void,
+  diagnostics: RecommendationDiagnosticsOptions = {}
 ): Promise<RecommendationResult> {
   const config = resolveLlmConfig();
   if (!config) {
-    console.info("[llm] no provider config found; streaming mock recommendations");
+    console.info("[llm] no provider config found; streaming mock recommendations", {
+      requestId: diagnostics.requestId
+    });
     const result = mockRecommendations(context);
     onEvent({ type: "fallback", reason: "missing_provider_config" });
     emitRecommendationWords(result, onEvent);
@@ -145,6 +152,7 @@ export async function streamRecommendationWords(
 
   try {
     console.info("[llm] streaming recommendations", {
+      requestId: diagnostics.requestId,
       provider: config.provider,
       model: config.model,
       baseUrl: config.baseUrl,
@@ -156,8 +164,15 @@ export async function streamRecommendationWords(
       delimiter: WORD_DELIMITER
     });
 
-    const words = await callOpenAiCompatibleProviderStream(context, config, onEvent, startedAt);
+    const words = await callOpenAiCompatibleProviderStream(
+      context,
+      config,
+      onEvent,
+      startedAt,
+      diagnostics
+    );
     console.info("[llm] streaming recommendations generated", {
+      requestId: diagnostics.requestId,
       provider: config.provider,
       model: config.model,
       wordCount: words.length,
@@ -167,6 +182,7 @@ export async function streamRecommendationWords(
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     console.warn("[llm] streaming recommendation failed; using mock fallback", {
+      requestId: diagnostics.requestId,
       provider: config.provider,
       model: config.model,
       durationMs: Date.now() - startedAt,
@@ -322,7 +338,8 @@ async function callOpenAiCompatibleProviderStream(
   context: LearningContext,
   config: LlmProviderConfig,
   onEvent: (event: RecommendationStreamEvent) => void,
-  startedAt: number
+  startedAt: number,
+  diagnostics: RecommendationDiagnosticsOptions
 ): Promise<RecommendationWordInput[]> {
   const client = new OpenAI({
     apiKey: config.apiKey,
@@ -338,6 +355,14 @@ async function callOpenAiCompatibleProviderStream(
   let firstWordAt: number | null = null;
   let contentChunks = 0;
   let reasoningChunks = 0;
+  let outputChars = 0;
+  let parseStage:
+    | "create_stream"
+    | "read_stream"
+    | "parse_delimited_segments"
+    | "parse_tail"
+    | "validate_words" = "create_stream";
+  let diagnosticContent = "";
 
   try {
     const stream = await client.chat.completions.create(requestBody, {
@@ -345,6 +370,7 @@ async function callOpenAiCompatibleProviderStream(
       maxRetries: 0
     });
 
+    parseStage = "read_stream";
     for await (const chunk of stream) {
       const delta = chunk.choices[0]?.delta as ChatDeltaWithReasoning | undefined;
       const reasoningContent = delta?.reasoning_content;
@@ -355,6 +381,7 @@ async function callOpenAiCompatibleProviderStream(
         if (!sawThinking) {
           sawThinking = true;
           console.info("[llm] streaming reasoning detected", {
+            requestId: diagnostics.requestId,
             provider: config.provider,
             model: config.model,
             firstReasoningMs: Date.now() - startedAt
@@ -368,14 +395,18 @@ async function callOpenAiCompatibleProviderStream(
       }
 
       contentChunks += 1;
+      outputChars += content.length;
       firstContentAt ??= Date.now();
+      diagnosticContent = appendDiagnosticContent(diagnosticContent, content);
       if (words.length >= wordBatchSize) {
         continue;
       }
 
       buffer += content;
+      parseStage = "parse_delimited_segments";
       const parsed = consumeDelimitedRecommendationWords(buffer, wordBatchSize - words.length);
       buffer = parsed.remainder;
+      parseStage = "read_stream";
 
       for (const word of parsed.words) {
         if (words.length >= wordBatchSize || hasRecommendationWord(words, word.word)) {
@@ -394,6 +425,7 @@ async function callOpenAiCompatibleProviderStream(
     }
 
     if (words.length < wordBatchSize) {
+      parseStage = "parse_tail";
       for (const word of parseStreamingRecommendationTail(buffer, words.length, words)) {
         if (words.length >= wordBatchSize || hasRecommendationWord(words, word.word)) {
           continue;
@@ -410,12 +442,19 @@ async function callOpenAiCompatibleProviderStream(
       }
     }
 
+    parseStage = "validate_words";
     const validatedWords = validateRecommendationWords(words);
     console.info("[llm] streaming telemetry", {
+      requestId: diagnostics.requestId,
       provider: config.provider,
       model: config.model,
       contentChunks,
       reasoningChunks,
+      wordsParsed: words.length,
+      outputChars,
+      outputSampleChars: diagnosticContent.length,
+      outputSampleTruncated: outputChars > diagnosticContent.length,
+      outputDelimiters: countOccurrences(diagnosticContent, WORD_DELIMITER),
       firstContentMs: firstContentAt ? firstContentAt - startedAt : null,
       firstWordMs: firstWordAt ? firstWordAt - startedAt : null,
       durationMs: Date.now() - startedAt
@@ -423,6 +462,26 @@ async function callOpenAiCompatibleProviderStream(
 
     return validatedWords;
   } catch (error) {
+    console.warn("[llm] streaming parse diagnostics", {
+      requestId: diagnostics.requestId,
+      provider: config.provider,
+      model: config.model,
+      stage: parseStage,
+      contentChunks,
+      reasoningChunks,
+      wordsParsed: words.length,
+      bufferChars: buffer.length,
+      bufferDelimiters: countOccurrences(buffer, WORD_DELIMITER),
+      outputChars,
+      outputSampleChars: diagnosticContent.length,
+      outputSampleTruncated: outputChars > diagnosticContent.length,
+      outputDelimiters: countOccurrences(diagnosticContent, WORD_DELIMITER),
+      outputFirst: diagnosticSnippet(diagnosticContent, "first"),
+      outputLast: diagnosticSnippet(diagnosticContent, "last"),
+      bufferFirst: diagnosticSnippet(buffer, "first"),
+      bufferLast: diagnosticSnippet(buffer, "last"),
+      error: error instanceof Error ? error.message : String(error)
+    });
     throw normalizeSdkError(error, config);
   }
 }
@@ -610,6 +669,48 @@ function parseRecommendationPayloadLoose(value: unknown, maxWords: number): Reco
   }
 
   return words.slice(0, maxWords);
+}
+
+const diagnosticContentLimit = 12_000;
+const diagnosticSnippetLength = 700;
+
+function appendDiagnosticContent(current: string, next: string): string {
+  if (current.length >= diagnosticContentLimit) {
+    return current;
+  }
+
+  return (current + next).slice(0, diagnosticContentLimit);
+}
+
+function countOccurrences(content: string, needle: string): number {
+  if (!content || !needle) {
+    return 0;
+  }
+
+  let count = 0;
+  let index = content.indexOf(needle);
+
+  while (index >= 0) {
+    count += 1;
+    index = content.indexOf(needle, index + needle.length);
+  }
+
+  return count;
+}
+
+function diagnosticSnippet(content: string, side: "first" | "last"): string | null {
+  const normalized = content.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return null;
+  }
+
+  if (normalized.length <= diagnosticSnippetLength) {
+    return normalized;
+  }
+
+  return side === "first"
+    ? `${normalized.slice(0, diagnosticSnippetLength)}...`
+    : `...${normalized.slice(-diagnosticSnippetLength)}`;
 }
 
 function parseJsonSegment(segment: string): unknown {
