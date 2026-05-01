@@ -79,6 +79,51 @@ describe("recommendation validation", () => {
     expect(parseRecommendationText(content)).toHaveLength(appConfig.wordBatchSize);
   });
 
+  it("accepts a delimited JSON array segment", () => {
+    const content = `${JSON.stringify(wordList())}\n${WORD_DELIMITER}`;
+    const parsed = consumeDelimitedRecommendationWords(content);
+
+    expect(parsed.words).toHaveLength(appConfig.wordBatchSize);
+    expect(parseRecommendationText(content).map((word) => word.word)).toEqual(
+      wordList().map((word) => word.word)
+    );
+  });
+
+  it("accepts a delimited wrapped recommendation object segment", () => {
+    const content = `${JSON.stringify({ words: wordList() })}\n${WORD_DELIMITER}`;
+
+    expect(parseRecommendationText(content)).toHaveLength(appConfig.wordBatchSize);
+  });
+
+  it("uses the first configured batch when a delimited response has extra segments", () => {
+    const content = wordList(appConfig.wordBatchSize + 2)
+      .map((word) => `${JSON.stringify(word)}\n${WORD_DELIMITER}`)
+      .join("\n");
+
+    expect(parseRecommendationText(content).map((word) => word.word)).toEqual(
+      wordList().map((word) => word.word)
+    );
+  });
+
+  it("normalizes common LLM scalar variants", () => {
+    const payload = {
+      words: wordList().map((word, index) =>
+        index === 0
+          ? {
+              ...word,
+              word: "don't panic",
+              difficulty: "7/10"
+            }
+          : word
+      )
+    };
+
+    const parsed = parseRecommendationText(JSON.stringify(payload));
+
+    expect(parsed[0].word).toBe("don't panic");
+    expect(parsed[0].difficulty).toBe(7);
+  });
+
   it("accepts noisy markdown around a wrapped recommendation object", () => {
     const content = [
       "好的，下面是推荐：",

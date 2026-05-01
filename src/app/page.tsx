@@ -16,6 +16,7 @@ import {
   History,
   ListChecks,
   Loader2,
+  Palette,
   PencilLine,
   RotateCcw,
   Settings,
@@ -35,6 +36,7 @@ import {
 import type { RecommendationWordInput, UserState, WordAction, WordRecordRow } from "@/lib/types";
 
 type Tab = "study" | "history" | "settings";
+type AppTheme = "focus" | "sketch";
 
 interface AssessmentQuestionView {
   id: string;
@@ -72,8 +74,26 @@ interface GenerateRecommendationsOptions {
 
 const usernameKey = "words-explore.username";
 const accessTokenKey = "words-explore.accessToken";
+const themeKey = "words-explore.theme";
 const unknownAnswer = "我不认识";
 const { wordBatchSize, autoNextSeconds } = appConfig;
+
+const themeOptions: Array<{
+  id: AppTheme;
+  label: string;
+  description: string;
+}> = [
+  {
+    id: "focus",
+    label: "专注",
+    description: "清爽卡片与稳定学习节奏"
+  },
+  {
+    id: "sketch",
+    label: "手绘",
+    description: "彩色贴纸、涂鸦边框与动感按钮"
+  }
+];
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
@@ -116,6 +136,19 @@ function clearStoredSession(): void {
 function storeSession(username: string, accessToken: string): void {
   window.localStorage.setItem(usernameKey, username);
   window.localStorage.setItem(accessTokenKey, accessToken);
+}
+
+function readStoredTheme(): AppTheme {
+  if (typeof window === "undefined") {
+    return "focus";
+  }
+
+  const stored = window.localStorage.getItem(themeKey);
+  return stored === "sketch" ? "sketch" : "focus";
+}
+
+function storeTheme(theme: AppTheme): void {
+  window.localStorage.setItem(themeKey, theme);
 }
 
 function consumeSseEvents(buffer: string): { events: SseEvent[]; remainder: string } {
@@ -200,6 +233,7 @@ export default function Home() {
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [questionIndex, setQuestionIndex] = useState(0);
   const [result, setResult] = useState<SubmitResult | null>(null);
+  const [theme, setTheme] = useState<AppTheme>("focus");
   const [busy, setBusy] = useState<string | null>("boot");
   const [error, setError] = useState<string | null>(null);
   const [studyWords, setStudyWords] = useState<WordRecordRow[]>([]);
@@ -210,10 +244,15 @@ export default function Home() {
   const [autoNextArmed, setAutoNextArmed] = useState(false);
   const [autoNextRemaining, setAutoNextRemaining] = useState(autoNextSeconds);
   const importInputRef = useRef<HTMLInputElement>(null);
+  const recommendationRequestRef = useRef(false);
 
   const currentQuestion = assessment?.questions[questionIndex] ?? null;
   const answeredCount = useMemo(() => Object.keys(answers).length, [answers]);
   const displayedStudyWords = studyWords;
+
+  useEffect(() => {
+    setTheme(readStoredTheme());
+  }, []);
 
   const loadState = useCallback(async (nextUsername: string) => {
     try {
@@ -369,7 +408,12 @@ export default function Home() {
       return;
     }
 
+    if (recommendationRequestRef.current) {
+      return;
+    }
+
     const replaceCurrent = options?.replaceCurrent === true;
+    recommendationRequestRef.current = true;
 
     try {
       setBusy("recommend");
@@ -471,6 +515,7 @@ export default function Home() {
       setLlmThinking(false);
       setError(recommendError instanceof Error ? recommendError.message : "推荐失败");
     } finally {
+      recommendationRequestRef.current = false;
       setBusy(null);
     }
   }, [username]);
@@ -752,12 +797,17 @@ export default function Home() {
     void submitAssessment();
   }
 
+  function changeTheme(nextTheme: AppTheme) {
+    setTheme(nextTheme);
+    storeTheme(nextTheme);
+  }
+
   return (
-    <main className="mobile-shell flex flex-col">
+    <main className="mobile-shell flex flex-col" data-theme={theme}>
       <header className="safe-pad sticky top-0 z-10 bg-mist/90 py-3 backdrop-blur-xl">
         {username && state ? (
-          <div className="control-card flex min-h-[60px] items-center gap-3 px-3 py-2 shadow-press">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-iris text-white">
+          <div className="control-card app-header-card flex min-h-[60px] items-center gap-3 px-3 py-2 shadow-press">
+            <div className="brand-mark flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-iris text-white">
               <BookOpenCheck size={21} aria-hidden />
             </div>
             <div className="min-w-0 flex-1">
@@ -778,7 +828,7 @@ export default function Home() {
           </div>
         ) : (
           <div className="flex min-h-[60px] items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-iris text-white shadow-press">
+            <div className="brand-mark flex h-10 w-10 items-center justify-center rounded-lg bg-iris text-white shadow-press">
               <BookOpenCheck size={21} aria-hidden />
             </div>
             <div>
@@ -803,7 +853,9 @@ export default function Home() {
         ) : !username || !state ? (
           <CreateUser
             busy={busy === "create"}
+            theme={theme}
             selectedGoal={selectedLearningGoal}
+            onThemeChange={changeTheme}
             onGoalChange={setSelectedLearningGoal}
             onCreate={beginLearning}
           />
@@ -835,7 +887,9 @@ export default function Home() {
           <SettingsView
             username={username}
             state={state}
+            theme={theme}
             busy={busy}
+            onThemeChange={changeTheme}
             onRename={renameUser}
             onReset={resetUserData}
             onLearningGoalChange={updateLearningGoal}
@@ -847,7 +901,7 @@ export default function Home() {
 
       {username ? (
         <nav className="safe-pad fixed bottom-0 left-1/2 z-20 w-full max-w-[520px] -translate-x-1/2 pb-[max(10px,env(safe-area-inset-bottom))] pt-2">
-          <div className="grid grid-cols-3 rounded-lg border border-line bg-white/95 p-1 shadow-soft backdrop-blur-xl">
+          <div className="bottom-nav grid grid-cols-3 rounded-lg border border-line bg-white/95 p-1 shadow-soft backdrop-blur-xl">
           <TabButton active={tab === "study"} label="学习" icon={<Sparkles size={19} />} onClick={() => setTab("study")} />
           <TabButton active={tab === "history"} label="记录" icon={<History size={19} />} onClick={() => setTab("history")} />
           <TabButton active={tab === "settings"} label="设置" icon={<Settings size={19} />} onClick={() => setTab("settings")} />
@@ -868,18 +922,22 @@ export default function Home() {
 
 function CreateUser({
   busy,
+  theme,
   selectedGoal,
+  onThemeChange,
   onGoalChange,
   onCreate
 }: {
   busy: boolean;
+  theme: AppTheme;
   selectedGoal: LearningGoal;
+  onThemeChange: (theme: AppTheme) => void;
   onGoalChange: (goal: LearningGoal) => void;
   onCreate: () => void;
 }) {
   return (
     <div className="flex min-h-[calc(100dvh-150px)] flex-col justify-center gap-5">
-      <section className="surface-card overflow-hidden">
+      <section className="surface-card hero-card overflow-hidden">
         <div className="border-b border-line bg-lilac/70 px-5 py-4">
           <div className="flex items-start gap-3">
             <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-iris text-white shadow-press">
@@ -899,6 +957,20 @@ function CreateUser({
             <OnboardingSignal icon={<ListChecks size={17} aria-hidden />} label="单词" value="分批推荐" />
           </div>
 
+          <div className="theme-picker mt-5">
+            <p className="text-sm font-black text-ink">主题</p>
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              {themeOptions.map((option) => (
+                <ThemeChoice
+                  key={option.id}
+                  option={option}
+                  active={theme === option.id}
+                  onClick={() => onThemeChange(option.id)}
+                />
+              ))}
+            </div>
+          </div>
+
           <div className="mt-5">
             <p className="text-sm font-black text-ink">学习目标</p>
             <div className="mt-3 grid grid-cols-2 gap-2">
@@ -908,9 +980,9 @@ function CreateUser({
               return (
                 <button
                   key={goal.id}
-                  className={`min-h-[82px] cursor-pointer rounded-lg border px-3 py-3 text-left transition duration-200 ${
+                  className={`goal-choice min-h-[82px] cursor-pointer rounded-lg border px-3 py-3 text-left transition duration-200 ${
                     active
-                      ? "border-iris bg-lilac text-iris shadow-press"
+                      ? "is-active border-iris bg-lilac text-iris shadow-press"
                       : "border-line bg-white text-ink hover:border-iris/35 hover:bg-lilac/40"
                   }`}
                   disabled={busy}
@@ -927,7 +999,7 @@ function CreateUser({
           </div>
 
           <button
-            className="button-base mt-6 w-full bg-leaf px-4 text-white shadow-press"
+            className="button-base start-button mt-6 w-full bg-leaf px-4 text-white shadow-press"
             disabled={busy}
             onClick={onCreate}
           >
@@ -950,7 +1022,7 @@ function OnboardingSignal({
   value: string;
 }) {
   return (
-    <div className="rounded-lg border border-line bg-paper px-2.5 py-3 text-center">
+    <div className="signal-card rounded-lg border border-line bg-paper px-2.5 py-3 text-center">
       <div className="mx-auto flex h-8 w-8 items-center justify-center rounded-lg bg-leaf/10 text-leaf">
         {icon}
       </div>
@@ -1037,7 +1109,7 @@ function StudyView({
 
   if (!state.user.assessmentCompletedAt && !assessment) {
     return (
-      <div className="surface-card p-5">
+      <div className="surface-card stage-card p-5">
         <div className="flex items-start gap-3">
           <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-amber/15 text-amber">
             <Gauge size={22} aria-hidden />
@@ -1051,7 +1123,7 @@ function StudyView({
           </div>
         </div>
         <button
-          className="button-base mt-6 w-full bg-ink px-4 text-white shadow-press"
+          className="button-base assessment-button mt-6 w-full bg-ink px-4 text-white shadow-press"
           disabled={busy === "assessment"}
           onClick={onStartAssessment}
         >
@@ -1072,7 +1144,7 @@ function StudyView({
     const progress = `${((questionIndex + 1) / assessment.questions.length) * 100}%`;
 
     return (
-      <div className="surface-card p-5">
+      <div className="surface-card quiz-card p-5">
         <div className="flex items-center justify-between">
           <span className="text-sm font-black text-steel">
             {questionIndex + 1} / {assessment.questions.length}
@@ -1089,9 +1161,9 @@ function StudyView({
           {[...currentQuestion.options, unknownAnswer].map((option) => (
             <button
               key={option}
-              className={`min-h-12 cursor-pointer rounded-lg border px-4 text-left text-base font-bold transition duration-200 ${
+              className={`answer-choice min-h-12 cursor-pointer rounded-lg border px-4 text-left text-base font-bold transition duration-200 ${
                 picked === option
-                  ? "border-iris bg-lilac text-iris shadow-press"
+                  ? "is-selected border-iris bg-lilac text-iris shadow-press"
                   : "border-line bg-white text-ink hover:border-iris/35 hover:bg-lilac/40"
               }`}
               onClick={() => onPickAnswer(currentQuestion.id, option)}
@@ -1101,7 +1173,7 @@ function StudyView({
           ))}
         </div>
         <button
-          className="button-base mt-6 w-full bg-leaf px-4 text-white shadow-press"
+          className="button-base next-button mt-6 w-full bg-leaf px-4 text-white shadow-press"
           disabled={!picked || busy === "submit"}
           onClick={onNextQuestion}
         >
@@ -1130,7 +1202,7 @@ function StudyView({
 
   if (displayedWords.length === 0) {
     return (
-      <div className="surface-card p-5">
+      <div className="surface-card stage-card p-5">
         <div className="flex items-start gap-3">
           <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-leaf/10 text-leaf">
             <Sparkles size={22} aria-hidden />
@@ -1142,7 +1214,7 @@ function StudyView({
         </div>
         {isGenerating ? <GenerationStatus thinking={llmThinking} count={streamWords.length} /> : null}
         <button
-          className="button-base mt-6 w-full bg-leaf px-4 text-white shadow-press"
+          className="button-base generate-button mt-6 w-full bg-leaf px-4 text-white shadow-press"
           disabled={isGenerating}
           onClick={() => onGenerate()}
         >
@@ -1166,7 +1238,7 @@ function StudyView({
           <Metric label="继续学" value={state.stats.learning} tone="steel" />
         </div>
       )}
-      <div className={`control-card flex items-center justify-between gap-3 px-3 py-3 ${allWordCardsCollapsed ? "min-h-9" : ""}`}>
+      <div className={`control-card list-toolbar flex items-center justify-between gap-3 px-3 py-3 ${allWordCardsCollapsed ? "min-h-9" : ""}`}>
         <div>
           <p className={allWordCardsCollapsed ? "text-xs font-bold text-steel" : "text-sm font-bold text-steel"}>
             学习列表
@@ -1176,7 +1248,7 @@ function StudyView({
           </h2>
         </div>
         <button
-          className="button-base bg-ink px-3 text-sm text-white shadow-press"
+          className="button-base batch-button bg-ink px-3 text-sm text-white shadow-press"
           disabled={isGenerating}
           onClick={() => onGenerate({ replaceCurrent: true })}
         >
@@ -1226,7 +1298,7 @@ function ResultPanel({
   const levelSummary = getEstimatedLevelSummary(result.estimatedLevel, result.targetDifficulty);
 
   return (
-    <div className="surface-card p-5">
+    <div className="surface-card result-card p-5">
       <div className="flex items-start gap-3">
         <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-leaf/10 text-leaf">
           <ShieldCheck size={22} aria-hidden />
@@ -1245,7 +1317,7 @@ function ResultPanel({
         <Metric label="目标" value={result.targetDifficulty} tone="amber" />
       </div>
       {busy ? <GenerationStatus thinking={llmThinking} count={streamCount} /> : null}
-      <button className="button-base mt-6 w-full bg-leaf px-4 text-white shadow-press" disabled={busy} onClick={() => onGenerate()}>
+      <button className="button-base generate-button mt-6 w-full bg-leaf px-4 text-white shadow-press" disabled={busy} onClick={() => onGenerate()}>
         {busy ? <Loader2 className="animate-spin" size={20} aria-hidden /> : <Sparkles size={20} aria-hidden />}
         生成 {wordBatchSize} 个词
       </button>
@@ -1300,7 +1372,7 @@ function AutoNextCountdown({
             <p className="mt-1 text-xs font-semibold text-steel">新单词会替换当前学习列表</p>
           </div>
           <button
-            className="button-base min-h-9 shrink-0 border border-coral/25 bg-coral/10 px-3 text-sm text-coral"
+            className="button-base stop-button min-h-9 shrink-0 border border-coral/25 bg-coral/10 px-3 text-sm text-coral"
             onClick={onStop}
           >
             <CircleStop size={16} aria-hidden />
@@ -1340,7 +1412,7 @@ function WordCard({
 
   return (
     <article
-      className={`border bg-white transition-[padding,box-shadow,border-color] duration-200 ${
+      className={`word-card border bg-white transition-[padding,box-shadow,border-color] duration-200 ${
         collapsed
           ? "rounded-lg border-line px-3 py-2 shadow-none"
           : "rounded-lg border-line p-4 shadow-soft"
@@ -1376,10 +1448,10 @@ function WordCard({
         inert={collapsed ? true : undefined}
       >
         <div className="overflow-hidden">
-          <p className="mt-4 rounded-lg border border-leaf/20 bg-leaf/10 px-3 py-2 text-lg font-black leading-7 text-leaf">{word.definitionZh}</p>
-          <p className="mt-3 rounded-lg bg-mist px-3 py-3 text-sm font-semibold leading-6 text-ink">{word.exampleEn}</p>
+          <p className="definition-chip mt-4 rounded-lg border border-leaf/20 bg-leaf/10 px-3 py-2 text-lg font-black leading-7 text-leaf">{word.definitionZh}</p>
+          <p className="example-chip mt-3 rounded-lg bg-mist px-3 py-3 text-sm font-semibold leading-6 text-ink">{word.exampleEn}</p>
           <p className="mt-2 px-1 text-sm font-semibold leading-6 text-steel">{word.exampleZh}</p>
-          <p className="mt-3 border-l-4 border-amber/60 bg-amber/10 px-3 py-2 text-sm font-semibold leading-6 text-steel">
+          <p className="reason-note mt-3 border-l-4 border-amber/60 bg-amber/10 px-3 py-2 text-sm font-semibold leading-6 text-steel">
             {word.difficultyReason}
           </p>
           <div className="mt-4 grid grid-cols-3 gap-2">
@@ -1431,7 +1503,7 @@ function HistoryView({
 
   return (
     <div className="space-y-5">
-      <div className="control-card flex items-center justify-between px-3 py-3">
+      <div className="control-card page-heading flex items-center justify-between px-3 py-3">
         <div>
           <p className="text-sm font-bold text-steel">学习记录</p>
           <h2 className="text-2xl font-black text-ink">{words.length} 个词</h2>
@@ -1511,7 +1583,7 @@ function HistoryWordRow({
   onAction?: (wordId: string) => void;
 }) {
   return (
-    <div className="rounded-lg border border-line bg-white p-4 shadow-[0_8px_20px_rgba(21,21,40,0.05)]">
+    <div className="history-row rounded-lg border border-line bg-white p-4 shadow-[0_8px_20px_rgba(21,21,40,0.05)]">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="truncate text-lg font-black text-ink">{word.word}</p>
@@ -1536,7 +1608,9 @@ function HistoryWordRow({
 function SettingsView({
   username,
   state,
+  theme,
   busy,
+  onThemeChange,
   onRename,
   onReset,
   onLearningGoalChange,
@@ -1545,7 +1619,9 @@ function SettingsView({
 }: {
   username: string;
   state: UserState;
+  theme: AppTheme;
   busy: string | null;
+  onThemeChange: (theme: AppTheme) => void;
   onRename: (nextUsername: string) => void;
   onReset: () => void;
   onLearningGoalChange: (goal: LearningGoal) => void;
@@ -1572,7 +1648,7 @@ function SettingsView({
 
   return (
     <div className="space-y-5">
-      <div className="control-card flex items-center justify-between px-3 py-3">
+      <div className="control-card page-heading flex items-center justify-between px-3 py-3">
         <div>
           <p className="text-sm font-bold text-steel">账户与数据</p>
           <h2 className="text-2xl font-black text-ink">设置</h2>
@@ -1582,7 +1658,24 @@ function SettingsView({
         </div>
       </div>
 
-      <section className="surface-card space-y-4 p-4">
+      <section className="surface-card theme-picker space-y-3 p-4">
+        <div className="flex items-center gap-2">
+          <Palette size={18} aria-hidden />
+          <p className="text-sm font-black text-ink">主题</p>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          {themeOptions.map((option) => (
+            <ThemeChoice
+              key={option.id}
+              option={option}
+              active={theme === option.id}
+              onClick={() => onThemeChange(option.id)}
+            />
+          ))}
+        </div>
+      </section>
+
+      <section className="surface-card settings-panel space-y-4 p-4">
         <div className="border-b border-line pb-4">
           <div className="min-w-0">
             <p className="text-xs font-black text-steel">用户 ID</p>
@@ -1598,7 +1691,7 @@ function SettingsView({
                 onChange={(event) => setUsernameDraft(event.target.value)}
               />
               <button
-                className="button-base min-h-11 shrink-0 border border-line bg-white px-3 text-sm text-ink"
+                className="button-base save-button min-h-11 shrink-0 border border-line bg-white px-3 text-sm text-ink"
                 disabled={busy === "rename" || !usernameChanged}
                 onClick={() => onRename(usernameDraft)}
               >
@@ -1624,9 +1717,9 @@ function SettingsView({
               return (
                 <button
                   key={goal.id}
-                  className={`min-h-14 cursor-pointer rounded-lg border px-3 py-2 text-left transition duration-200 ${
+                  className={`goal-choice min-h-14 cursor-pointer rounded-lg border px-3 py-2 text-left transition duration-200 ${
                     active
-                      ? "border-iris bg-lilac text-iris shadow-press"
+                      ? "is-active border-iris bg-lilac text-iris shadow-press"
                       : "border-line bg-white text-ink hover:border-iris/35 hover:bg-lilac/40"
                   }`}
                   disabled={active || busy?.startsWith("goal:")}
@@ -1652,14 +1745,14 @@ function SettingsView({
             </p>
             <div className="mt-3 grid grid-cols-2 gap-2">
               <button
-                className="button-base border border-line bg-white px-3 text-sm text-ink"
+                className="button-base cancel-button border border-line bg-white px-3 text-sm text-ink"
                 disabled={busy === "reset"}
                 onClick={() => setConfirmingReset(false)}
               >
                 取消
               </button>
               <button
-                className="button-base bg-coral px-3 text-sm text-white"
+                className="button-base reset-button bg-coral px-3 text-sm text-white"
                 disabled={busy === "reset"}
                 onClick={() => {
                   setConfirmingReset(false);
@@ -1677,7 +1770,7 @@ function SettingsView({
           </div>
         ) : (
           <button
-            className="button-base w-full border border-coral/25 bg-coral/10 px-4 text-coral"
+            className="button-base reset-button w-full border border-coral/25 bg-coral/10 px-4 text-coral"
             disabled={busy === "reset"}
             onClick={() => setConfirmingReset(true)}
           >
@@ -1691,13 +1784,13 @@ function SettingsView({
         )}
       </section>
 
-      <section className="surface-card space-y-3 p-4">
+      <section className="surface-card data-panel space-y-3 p-4">
         <div className="grid grid-cols-2 gap-2.5">
           <Metric label="单词" value={state.stats.totalWords} tone="steel" />
           <Metric label="等级" value={state.user.estimatedLevel ?? "-"} tone="leaf" />
         </div>
         <button
-          className="button-base w-full bg-ink px-4 text-white shadow-press"
+          className="button-base export-button w-full bg-ink px-4 text-white shadow-press"
           disabled={busy === "export"}
           onClick={onExport}
         >
@@ -1709,7 +1802,7 @@ function SettingsView({
           导出数据库
         </button>
         <button
-          className="button-base w-full border border-line bg-white px-4 text-ink"
+          className="button-base import-button w-full border border-line bg-white px-4 text-ink"
           disabled={busy === "import"}
           onClick={onImport}
         >
@@ -1722,6 +1815,33 @@ function SettingsView({
         </button>
       </section>
     </div>
+  );
+}
+
+function ThemeChoice({
+  option,
+  active,
+  onClick
+}: {
+  option: (typeof themeOptions)[number];
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      className={`theme-choice min-h-[84px] cursor-pointer rounded-lg border px-3 py-3 text-left transition duration-200 ${
+        active
+          ? "is-active border-iris bg-lilac text-iris shadow-press"
+          : "border-line bg-white text-ink hover:border-iris/35 hover:bg-lilac/40"
+      }`}
+      aria-pressed={active}
+      onClick={onClick}
+    >
+      <span className="block text-base font-black">{option.label}</span>
+      <span className="mt-1 block text-xs font-semibold leading-5 text-steel">
+        {option.description}
+      </span>
+    </button>
   );
 }
 
@@ -1741,7 +1861,7 @@ function Metric({
         ? "border-amber/25 bg-amber/15 text-amber"
         : "border-steel/15 bg-white text-steel";
   return (
-    <div className={`min-h-20 rounded-lg border px-3 py-3 shadow-[0_8px_20px_rgba(21,21,40,0.04)] ${toneClass}`}>
+    <div className={`metric-card metric-${tone} min-h-20 rounded-lg border px-3 py-3 shadow-[0_8px_20px_rgba(21,21,40,0.04)] ${toneClass}`}>
       <p className="text-xs font-black">{label}</p>
       <p className="mt-2 truncate text-2xl font-black">{value}</p>
     </div>
@@ -1768,7 +1888,7 @@ function StatusBadge({
 
   return (
     <span
-      className={`shrink-0 rounded-md font-black ${compact ? "px-1.5 py-0.5 text-[10px]" : "px-2 py-1 text-xs"} ${style}`}
+      className={`status-badge status-${status} shrink-0 rounded-md font-black ${compact ? "px-1.5 py-0.5 text-[10px]" : "px-2 py-1 text-xs"} ${style}`}
     >
       {label}
     </span>
@@ -1788,9 +1908,12 @@ function ActionButton({
   disabled: boolean;
   onClick: () => void;
 }) {
+  const actionClass =
+    label === "会了" ? "action-learned" : label === "简单" ? "action-easy" : "action-learning";
+
   return (
     <button
-      className={`button-base min-w-0 px-2 text-sm ${
+      className={`button-base word-action ${actionClass} min-w-0 px-2 text-sm ${
         active ? "bg-leaf text-white shadow-press" : "border border-line bg-mist text-ink"
       }`}
       disabled={disabled}
@@ -1815,7 +1938,7 @@ function TabButton({
 }) {
   return (
     <button
-      className={`flex min-h-12 cursor-pointer flex-col items-center justify-center rounded-lg text-xs font-black transition duration-200 ${
+      className={`tab-button flex min-h-12 cursor-pointer flex-col items-center justify-center rounded-lg text-xs font-black transition duration-200 ${
         active ? "bg-lilac text-iris shadow-[inset_0_-2px_0_rgba(79,70,229,0.12)]" : "text-steel hover:bg-mist"
       }`}
       onClick={onClick}

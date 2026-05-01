@@ -109,6 +109,307 @@ input:focus-visible {
   background: rgba(255, 255, 255, 0.92);
 }
 
+.mobile-shell[data-theme="sketch"] {
+  --sketch-ink: #171427;
+  --sketch-purple: #5b4bff;
+  --sketch-pink: #ff5aa5;
+  --sketch-yellow: #ffd95a;
+  --sketch-teal: #26c6b4;
+  --sketch-mint: #b9f6d6;
+  --sketch-orange: #ff8a3d;
+  --sketch-paper: #fffaf0;
+  background:
+    repeating-linear-gradient(
+      0deg,
+      rgba(23, 20, 39, 0.025) 0,
+      rgba(23, 20, 39, 0.025) 1px,
+      transparent 1px,
+      transparent 18px
+    ),
+    repeating-linear-gradient(
+      90deg,
+      rgba(38, 198, 180, 0.055) 0,
+      rgba(38, 198, 180, 0.055) 1px,
+      transparent 1px,
+      transparent 22px
+    ),
+    linear-gradient(135deg, #fffaf0 0%, #eef2ff 42%, #fdf2f8 100%);
+  color: var(--sketch-ink);
+}
+
+.mobile-shell[data-theme="sketch"]::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 18px 18px, rgba(91, 75, 255, 0.22) 0 2px, transparent 2px),
+    radial-gradient(circle at 11px 12px, rgba(255, 138, 61, 0.18) 0 1.5px, transparent 1.5px);
+  background-size: 42px 42px, 58px 58px;
+  opacity: 0.45;
+}
+
+.mobile-shell[data-theme="sketch"] .safe-pad,
+.mobile-shell[data-theme="sketch"] header,
+.mobile-shell[data-theme="sketch"] section,
+.mobile-shell[data-theme="sketch"] nav {
+  position: relative;
+  z-index: 1;
+}
+
+.mobile-shell[data-theme="sketch"] .brand-mark {
+  background: linear-gradient(135deg, var(--sketch-purple), var(--sketch-pink));
+  border: 2px solid var(--sketch-ink);
+  border-radius: 18px 14px 20px 12px / 14px 19px 13px 18px;
+  box-shadow: 5px 5px 0 var(--sketch-yellow);
+  transform: rotate(-2deg);
+}
+
+.mobile-shell[data-theme="sketch"] .surface-card,
+.mobile-shell[data-theme="sketch"] .control-card,
+.mobile-shell[data-theme="sketch"] .word-card,
+.mobile-shell[data-theme="sketch"] .history-row,
+.mobile-shell[data-theme="sketch"] .metric-card,
+.mobile-shell[data-theme="sketch"] .signal-card {
+  position: relative;
+  border: 2px solid var(--sketch-ink);
+  border-radius: 18px 15px 20px 13px / 14px 22px 16px 18px;
+  background: rgba(255, 250, 240, 0.94);
+  box-shadow: 7px 8px 0 rgba(23, 20, 39, 0.92);
+}
+
+.mobile-shell[data-theme="sketch"] .surface-card::before,
+.mobile-shell[data-theme="sketch"] .control-card::before,
+.mobile-shell[data-theme="sketch"] .word-card::before,
+.mobile-shell[data-theme="sketch"] .history-row::before,
+.mobile-shell[data-theme="sketch"] .metric-card::before,
+.mobile-shell[data-theme="sketch"] .signal-card::before {
+  content: "";
+  position: absolute;
+  inset: 4px -3px -3px 4px;
+  pointer-events: none;
+  border: 2px solid rgba(23, 20, 39, 0.28);
+  border-radius: 15px 19px 14px 21px / 19px 13px 22px 15px;
+  transform: rotate(-0.5deg);
+}
+
+.mobile-shell[data-theme="sketch"] .app-header-card,
+.mobile-shell[data-theme="sketch"] .page-heading,
+.mobile-shell[data-theme="sketch"] .list-toolbar {
+  background:
+    linear-gradient(100deg, rgba(255, 217, 90, 0.34), rgba(38, 198, 180, 0.24)),
+    var(--sketch-paper);
+}
+
+.mobile-shell[data-theme="sketch"] .hero-card {
+  transform: rotate(-0.4deg);
+}
+
+.mobile-shell[data-theme="sketch"] .hero-card > div:first-child {
+  background:
+    repeating-linear-gradient(135deg, rgba(91, 75, 255, 0.15) 0 9px, transparent 9px 18px),
+    linear-gradient(100deg, rgba(255, 90, 165, 0.18), rgba(255, 217, 90, 0.24));
+  border-color: var(--sketch-ink);
+}
+
+.mobile-shell[data-theme="sketch"] .button-base,
+.mobile-shell[data-theme="sketch"] .goal-choice,
+.mobile-shell[data-theme="sketch"] .theme-choice,
+.mobile-shell[data-theme="sketch"] .answer-choice,
+.mobile-shell[data-theme="sketch"] .tab-button {
+  border: 2px solid var(--sketch-ink);
+  border-radius: 15px 13px 17px 12px / 12px 18px 13px 17px;
+  box-shadow: 4px 5px 0 var(--sketch-ink);
+  font-weight: 900;
+  transform: rotate(-0.35deg);
+  transition:
+    transform 160ms cubic-bezier(0.34, 1.56, 0.64, 1),
+    box-shadow 160ms ease,
+    opacity 160ms ease,
+    background 160ms ease,
+    color 160ms ease;
+}
+
+.mobile-shell[data-theme="sketch"] .button-base:hover:not(:disabled),
+.mobile-shell[data-theme="sketch"] .goal-choice:hover:not(:disabled),
+.mobile-shell[data-theme="sketch"] .theme-choice:hover:not(:disabled),
+.mobile-shell[data-theme="sketch"] .answer-choice:hover:not(:disabled),
+.mobile-shell[data-theme="sketch"] .tab-button:hover:not(:disabled) {
+  transform: translateY(-1px) rotate(0.45deg);
+  box-shadow: 5px 6px 0 var(--sketch-ink);
+}
+
+.mobile-shell[data-theme="sketch"] .button-base:active:not(:disabled),
+.mobile-shell[data-theme="sketch"] .goal-choice:active:not(:disabled),
+.mobile-shell[data-theme="sketch"] .theme-choice:active:not(:disabled),
+.mobile-shell[data-theme="sketch"] .answer-choice:active:not(:disabled),
+.mobile-shell[data-theme="sketch"] .tab-button:active:not(:disabled) {
+  transform: translate(3px, 3px) rotate(-0.2deg) scale(0.98);
+  box-shadow: 1px 2px 0 var(--sketch-ink);
+}
+
+.mobile-shell[data-theme="sketch"] .start-button,
+.mobile-shell[data-theme="sketch"] .generate-button {
+  background: linear-gradient(135deg, var(--sketch-teal), var(--sketch-pink));
+  color: #ffffff;
+}
+
+.mobile-shell[data-theme="sketch"] .assessment-button,
+.mobile-shell[data-theme="sketch"] .batch-button,
+.mobile-shell[data-theme="sketch"] .export-button {
+  background: linear-gradient(135deg, var(--sketch-purple), #27214d);
+  color: #ffffff;
+}
+
+.mobile-shell[data-theme="sketch"] .next-button {
+  background: linear-gradient(135deg, #16a085, var(--sketch-teal));
+  color: #ffffff;
+}
+
+.mobile-shell[data-theme="sketch"] .save-button,
+.mobile-shell[data-theme="sketch"] .import-button,
+.mobile-shell[data-theme="sketch"] .cancel-button {
+  background: #ffffff;
+  color: var(--sketch-ink);
+}
+
+.mobile-shell[data-theme="sketch"] .reset-button,
+.mobile-shell[data-theme="sketch"] .stop-button {
+  background:
+    repeating-linear-gradient(-45deg, rgba(255, 255, 255, 0.18) 0 8px, transparent 8px 15px),
+    var(--sketch-orange);
+  color: var(--sketch-ink);
+}
+
+.mobile-shell[data-theme="sketch"] .word-action.action-learned {
+  background: var(--sketch-mint);
+  color: var(--sketch-ink);
+}
+
+.mobile-shell[data-theme="sketch"] .word-action.action-easy {
+  background: var(--sketch-yellow);
+  color: var(--sketch-ink);
+}
+
+.mobile-shell[data-theme="sketch"] .word-action.action-learning {
+  background: #d9d6ff;
+  color: var(--sketch-purple);
+}
+
+.mobile-shell[data-theme="sketch"] .goal-choice,
+.mobile-shell[data-theme="sketch"] .theme-choice,
+.mobile-shell[data-theme="sketch"] .answer-choice {
+  background: #ffffff;
+}
+
+.mobile-shell[data-theme="sketch"] .goal-choice:nth-child(2n),
+.mobile-shell[data-theme="sketch"] .theme-choice:nth-child(2n),
+.mobile-shell[data-theme="sketch"] .answer-choice:nth-child(2n) {
+  transform: rotate(0.45deg);
+}
+
+.mobile-shell[data-theme="sketch"] .goal-choice.is-active,
+.mobile-shell[data-theme="sketch"] .theme-choice.is-active,
+.mobile-shell[data-theme="sketch"] .answer-choice.is-selected {
+  background:
+    linear-gradient(0deg, rgba(255, 217, 90, 0.38), rgba(255, 217, 90, 0.38)),
+    #ffffff;
+  color: var(--sketch-purple);
+}
+
+.mobile-shell[data-theme="sketch"] .signal-card:nth-child(1),
+.mobile-shell[data-theme="sketch"] .metric-leaf {
+  background: #dffbee;
+}
+
+.mobile-shell[data-theme="sketch"] .signal-card:nth-child(2),
+.mobile-shell[data-theme="sketch"] .metric-amber {
+  background: #fff1bd;
+}
+
+.mobile-shell[data-theme="sketch"] .signal-card:nth-child(3),
+.mobile-shell[data-theme="sketch"] .metric-steel {
+  background: #e4e1ff;
+}
+
+.mobile-shell[data-theme="sketch"] .word-card {
+  animation: sketch-card-in 260ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(255, 250, 240, 0.95)),
+    var(--sketch-paper);
+}
+
+.mobile-shell[data-theme="sketch"] .word-card:nth-child(2n) {
+  transform: rotate(0.35deg);
+}
+
+.mobile-shell[data-theme="sketch"] .definition-chip {
+  border: 2px solid var(--sketch-ink);
+  background: var(--sketch-mint);
+  color: #087663;
+}
+
+.mobile-shell[data-theme="sketch"] .example-chip {
+  border: 2px solid rgba(23, 20, 39, 0.16);
+  background: #f3f0ff;
+}
+
+.mobile-shell[data-theme="sketch"] .reason-note {
+  border-left: 7px solid var(--sketch-orange);
+  background: #fff2d4;
+}
+
+.mobile-shell[data-theme="sketch"] .status-badge {
+  border: 2px solid var(--sketch-ink);
+  border-radius: 12px 10px 13px 9px / 9px 14px 10px 12px;
+  color: var(--sketch-ink);
+}
+
+.mobile-shell[data-theme="sketch"] .status-new {
+  background: #ffffff;
+}
+
+.mobile-shell[data-theme="sketch"] .status-learned {
+  background: var(--sketch-mint);
+}
+
+.mobile-shell[data-theme="sketch"] .status-too_easy {
+  background: var(--sketch-yellow);
+}
+
+.mobile-shell[data-theme="sketch"] .status-learning {
+  background: #d9d6ff;
+}
+
+.mobile-shell[data-theme="sketch"] .bottom-nav {
+  border: 2px solid var(--sketch-ink);
+  background: rgba(255, 250, 240, 0.96);
+  box-shadow: 0 -2px 0 #ffffff, 6px 7px 0 var(--sketch-ink);
+}
+
+.mobile-shell[data-theme="sketch"] .tab-button {
+  box-shadow: none;
+  border-color: transparent;
+  background: transparent;
+}
+
+.mobile-shell[data-theme="sketch"] .tab-button[class*="bg-lilac"] {
+  border-color: var(--sketch-ink);
+  background: #e5e1ff;
+  box-shadow: 3px 4px 0 var(--sketch-ink);
+}
+
+@keyframes sketch-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) rotate(-1.5deg);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) rotate(0deg);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

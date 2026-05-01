@@ -124,7 +124,14 @@ export async function POST(request: Request) {
           send("error", { error: "推荐失败，请稍后再试" });
           controller.close();
         } finally {
-          await releaseLock();
+          try {
+            await releaseLock();
+          } catch (error) {
+            console.warn("[api/recommendations/stream] release lock failed", {
+              username,
+              error: error instanceof Error ? error.message : String(error)
+            });
+          }
         }
       })();
     }

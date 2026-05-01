@@ -13,14 +13,29 @@ import type { LearningContext, RecommendationWordInput } from "@/lib/types";
 
 const { wordBatchSize } = appConfig;
 
+const compactText = (min: number, max: number) =>
+  z
+    .string()
+    .transform((value) => value.trim())
+    .pipe(z.string().min(min).max(max));
+
 const recommendationWordSchema = z.object({
-  word: z.string().min(2).max(40).regex(/^[A-Za-z][A-Za-z -]*$/),
-  partOfSpeech: z.string().min(1).max(30),
-  definitionZh: z.string().min(1).max(80),
-  exampleEn: z.string().min(8).max(180),
-  exampleZh: z.string().min(4).max(180),
-  difficultyReason: z.string().min(4).max(140),
-  difficulty: z.number().int().min(1).max(10)
+  word: compactText(2, 60).refine((value) => /^[A-Za-z][A-Za-z '-]*[A-Za-z]$/.test(value), {
+    message: "Word must contain only English letters, spaces, hyphens, or apostrophes"
+  }),
+  partOfSpeech: compactText(1, 40),
+  definitionZh: compactText(1, 160),
+  exampleEn: compactText(8, 320),
+  exampleZh: compactText(4, 320),
+  difficultyReason: compactText(4, 240),
+  difficulty: z.preprocess((value) => {
+    if (typeof value === "string") {
+      const match = value.match(/\d+(?:\.\d+)?/);
+      return match ? Number(match[0]) : value;
+    }
+
+    return value;
+  }, z.number().int().min(1).max(10))
 });
 
 const recommendationSchema = z.object({
@@ -228,7 +243,7 @@ export function parseRecommendationText(content: string): RecommendationWordInpu
   const stripped = stripJsonFence(content);
 
   if (stripped.includes(WORD_DELIMITER)) {
-    const parsed = consumeDelimitedRecommendationWords(stripped);
+    const parsed = consumeDelimitedRecommendationWords(stripped, wordBatchSize);
     const words = [
       ...parsed.words,
       ...parseStreamingRecommendationTail(parsed.remainder, parsed.words.length, parsed.words)
@@ -240,8 +255,12 @@ export function parseRecommendationText(content: string): RecommendationWordInpu
   return validateRecommendationWords(parseRecommendationCandidates(stripped, wordBatchSize));
 }
 
-export function consumeDelimitedRecommendationWords(buffer: string): DelimitedRecommendationParseResult {
+export function consumeDelimitedRecommendationWords(
+  buffer: string,
+  maxWords = wordBatchSize
+): DelimitedRecommendationParseResult {
   const words: RecommendationWordInput[] = [];
+  const seen = new Set<string>();
   let remainder = buffer;
   let delimiterIndex = remainder.indexOf(WORD_DELIMITER);
 
@@ -251,9 +270,16 @@ export function consumeDelimitedRecommendationWords(buffer: string): DelimitedRe
     remainder = remainder.slice(delimiterIndex + WORD_DELIMITER.length);
 
     if (segment.length > 0) {
-      const parsedWords = parseRecommendationCandidates(segment, 1);
-      if (parsedWords[0]) {
-        words.push(parsedWords[0]);
+      const remainingSlots = Math.max(0, maxWords - words.length);
+      const parsedWords =
+        remainingSlots > 0 ? parseRecommendationCandidates(segment, remainingSlots) : [];
+
+      for (const word of parsedWords) {
+        const key = word.word.toLowerCase();
+        if (!seen.has(key)) {
+          words.push(word);
+          seen.add(key);
+        }
       }
     }
 
@@ -343,12 +369,19 @@ async function callOpenAiCompatibleProviderStream(
 
       contentChunks += 1;
       firstContentAt ??= Date.now();
-      buffer += content;
+      if (words.length >= wordBatchSize) {
+        continue;
+      }
 
-      const parsed = consumeDelimitedRecommendationWords(buffer);
+      buffer += content;
+      const parsed = consumeDelimitedRecommendationWords(buffer, wordBatchSize - words.length);
       buffer = parsed.remainder;
 
       for (const word of parsed.words) {
+        if (words.length >= wordBatchSize || hasRecommendationWord(words, word.word)) {
+          continue;
+        }
+
         words.push(word);
         firstWordAt ??= Date.now();
         onEvent({
@@ -360,15 +393,21 @@ async function callOpenAiCompatibleProviderStream(
       }
     }
 
-    for (const word of parseStreamingRecommendationTail(buffer, words.length, words)) {
-      words.push(word);
-      firstWordAt ??= Date.now();
-      onEvent({
-        type: "word",
-        source: config.provider,
-        word,
-        index: words.length
-      });
+    if (words.length < wordBatchSize) {
+      for (const word of parseStreamingRecommendationTail(buffer, words.length, words)) {
+        if (words.length >= wordBatchSize || hasRecommendationWord(words, word.word)) {
+          continue;
+        }
+
+        words.push(word);
+        firstWordAt ??= Date.now();
+        onEvent({
+          type: "word",
+          source: config.provider,
+          word,
+          index: words.length
+        });
+      }
     }
 
     const validatedWords = validateRecommendationWords(words);
@@ -495,7 +534,21 @@ function parseRecommendationPayload(value: unknown): RecommendationWordInput[] {
     return direct.data;
   }
 
-  return recommendationSchema.parse(value).words;
+  const wrappedLoose = z.object({
+    words: z.array(recommendationWordSchema)
+  }).safeParse(value);
+  if (wrappedLoose.success) {
+    throw new Error(
+      `Expected ${wordBatchSize} recommendation words, got ${wrappedLoose.data.words.length}`
+    );
+  }
+
+  const directLoose = z.array(recommendationWordSchema).safeParse(value);
+  if (directLoose.success) {
+    throw new Error(`Expected ${wordBatchSize} recommendation words, got ${directLoose.data.length}`);
+  }
+
+  throw new Error("Invalid recommendation payload shape");
 }
 
 function parseRecommendationCandidates(content: string, maxWords: number): RecommendationWordInput[] {
@@ -682,6 +735,11 @@ function uniqueByWord(words: RecommendationWordInput[]): RecommendationWordInput
     seen.add(key);
     return true;
   });
+}
+
+function hasRecommendationWord(words: RecommendationWordInput[], nextWord: string): boolean {
+  const key = nextWord.toLowerCase();
+  return words.some((word) => word.word.toLowerCase() === key);
 }
 
 const mockPool: RecommendationWordInput[] = [
