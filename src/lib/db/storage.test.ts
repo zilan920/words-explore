@@ -8,7 +8,7 @@ import {
   resolveStorageConfig,
   writeBundleToSqlite
 } from "@/lib/db/storage";
-import { scoreAssessment } from "@/lib/assessment";
+import { assessmentBank, scoreAssessment } from "@/lib/assessment";
 import type { RecommendationWordInput } from "@/lib/types";
 import { generateAccessToken, hashAccessToken } from "@/lib/security";
 
@@ -27,21 +27,18 @@ describe("NodeSqliteStorage", () => {
     await storage.createUser(username, accessTokenHash, "cet6");
     expect(await storage.verifyUserAccess(username, accessTokenHash)).toBe(true);
     expect(await storage.verifyUserAccess(username, hashAccessToken("wrong-token-value-that-is-long-enough"))).toBe(false);
+    const assessmentQuestions = assessmentBank.slice(0, 10);
     await storage.startAssessment(username, "00000000-0000-4000-8000-000000000001");
     await storage.saveAssessmentResult(
       username,
-      scoreAssessment("00000000-0000-4000-8000-000000000001", [
-        { questionId: "a1", selectedAnswer: "很小的" },
-        { questionId: "a2", selectedAnswer: "借入" },
-        { questionId: "a3", selectedAnswer: "普通的" },
-        { questionId: "a4", selectedAnswer: "错误" },
-        { questionId: "a5", selectedAnswer: "错误" },
-        { questionId: "a6", selectedAnswer: "错误" },
-        { questionId: "a7", selectedAnswer: "错误" },
-        { questionId: "a8", selectedAnswer: "错误" },
-        { questionId: "a9", selectedAnswer: "错误" },
-        { questionId: "a10", selectedAnswer: "错误" }
-      ])
+      scoreAssessment(
+        "00000000-0000-4000-8000-000000000001",
+        assessmentQuestions.map((question, index) => ({
+          questionId: question.id,
+          selectedAnswer: index < 3 ? question.correctAnswer : "错误"
+        })),
+        assessmentQuestions
+      )
     );
 
     const batch = await storage.createRecommendationBatch(

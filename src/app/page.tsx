@@ -1131,9 +1131,15 @@ function ResultPanel({
   llmThinking: boolean;
   onGenerate: (options?: GenerateRecommendationsOptions) => void;
 }) {
+  const levelSummary = getEstimatedLevelSummary(result.estimatedLevel, result.targetDifficulty);
+
   return (
     <div className="rounded-lg border border-black/10 bg-white p-5 shadow-soft">
       <p className="text-sm font-bold text-leaf">初测完成</p>
+      <div className="mt-3 rounded-lg bg-leaf/10 px-3 py-3 text-sm leading-6 text-ink">
+        <p className="font-black">你的大概程度：{result.estimatedLevel}</p>
+        <p className="mt-1 font-semibold text-steel">{levelSummary}</p>
+      </div>
       <div className="mt-4 grid grid-cols-3 gap-3">
         <Metric label="得分" value={result.score} tone="leaf" />
         <Metric label="等级" value={result.estimatedLevel} tone="steel" />
@@ -1146,6 +1152,19 @@ function ResultPanel({
       </button>
     </div>
   );
+}
+
+function getEstimatedLevelSummary(level: string, targetDifficulty: number): string {
+  const base =
+    level === "入门"
+      ? "适合先巩固高频基础词和核心释义。"
+      : level === "进阶"
+        ? "常用词基础已经建立，适合扩展考试和阅读场景词。"
+        : level === "熟练"
+          ? "基础较扎实，可以挑战更细的语义辨析和中高难场景词。"
+          : "词汇基础较强，适合高阶学术词、抽象词和近义辨析。";
+
+  return `${base} 后续推荐会从难度 ${targetDifficulty} 附近开始。`;
 }
 
 function GenerationStatus({ thinking, count }: { thinking: boolean; count: number }) {

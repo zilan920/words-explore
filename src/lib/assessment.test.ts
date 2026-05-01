@@ -8,19 +8,24 @@ import {
 import { learningGoalOptions } from "@/lib/learningGoals";
 
 describe("assessment", () => {
-  it("starts a mixed 10 question assessment", () => {
+  it("starts a 10 question assessment that covers every difficulty level", () => {
     const session = startAssessmentSession();
+    const difficulties = new Set(session.questions.map((question) => question.difficulty));
 
     expect(session.questions).toHaveLength(10);
-    expect(session.questions.some((question) => question.difficulty <= 3)).toBe(true);
-    expect(session.questions.some((question) => question.difficulty >= 7)).toBe(true);
+    expect([...difficulties].sort()).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    expect(session.questions.every((question) => question.options[0] === question.correctAnswer)).toBe(false);
   });
 
-  it("uses a goal-specific question bank", () => {
+  it("uses an expanded goal-specific question bank", () => {
     for (const goal of learningGoalOptions) {
       const session = startAssessmentSession(goal.id);
-      const bankIds = new Set(getAssessmentBank(goal.id).map((question) => question.id));
+      const bank = getAssessmentBank(goal.id);
+      const bankIds = new Set(bank.map((question) => question.id));
 
+      for (let difficulty = 1; difficulty <= 9; difficulty += 1) {
+        expect(bank.filter((question) => question.difficulty === difficulty)).toHaveLength(5);
+      }
       expect(session.questions).toHaveLength(10);
       expect(session.questions.every((question) => bankIds.has(question.id))).toBe(true);
     }
