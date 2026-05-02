@@ -23,12 +23,14 @@ const baseWord = {
 
 const compactBaseWord = {
   w: "coherent",
-  p: "adj",
-  z: "连贯的",
-  e: "A coherent answer connects ideas logically.",
-  t: "连贯回答能有逻辑地连接观点。",
   r: "抽象表达",
   l: 7
+};
+
+const baseCandidate = {
+  word: "coherent",
+  difficultyReason: "适合当前难度。",
+  difficulty: 7
 };
 
 function testWord(index: number): string {
@@ -82,7 +84,7 @@ describe("recommendation validation", () => {
       `${JSON.stringify(first)}\n${WORD_DELIMITER}\n${JSON.stringify(second)}`
     );
 
-    expect(parsed.words).toEqual([first]);
+    expect(parsed.words).toEqual([{ ...baseCandidate, word: first.word }]);
     expect(parsed.remainder).toContain("subtle");
   });
 
@@ -157,28 +159,16 @@ describe("recommendation validation", () => {
     expect(parseRecommendationWordBatchText(JSON.stringify({ words }), 3)).toEqual([
       {
         word: "coherent",
-        partOfSpeech: "adj",
-        definitionZh: "连贯的",
-        exampleEn: "A coherent answer connects ideas logically.",
-        exampleZh: "连贯回答能有逻辑地连接观点。",
         difficultyReason: "抽象表达",
         difficulty: 7
       },
       {
         word: "subtle",
-        partOfSpeech: "adj",
-        definitionZh: "连贯的",
-        exampleEn: "A coherent answer connects ideas logically.",
-        exampleZh: "连贯回答能有逻辑地连接观点。",
         difficultyReason: "抽象表达",
         difficulty: 7
       },
       {
         word: "compose",
-        partOfSpeech: "adj",
-        definitionZh: "连贯的",
-        exampleEn: "A coherent answer connects ideas logically.",
-        exampleZh: "连贯回答能有逻辑地连接观点。",
         difficultyReason: "抽象表达",
         difficulty: 7
       }
@@ -299,7 +289,8 @@ describe("recommendation prompt", () => {
     expect(prompt).toContain("推荐 3 个");
     expect(prompt).toContain('{"words": [...]}');
     expect(prompt).toContain("长度为 3 的 JSON array");
-    expect(prompt).toContain("短字段：w, p, z, e, t, r, l");
+    expect(prompt).toContain("短字段：w, r, l");
+    expect(prompt).toContain("词典工具补齐");
     expect(prompt).toContain('"w": "coherent"');
     expect(prompt).toContain("学习目标：雅思");
     expect(prompt).toContain("学会的单词：coherent");
@@ -314,6 +305,7 @@ describe("app config", () => {
   it("keeps non-secret app behavior in TypeScript config", () => {
     expect(appConfig).toEqual({
       wordBatchSize: 10,
+      studyQueueTargetSize: 3,
       autoNextSeconds: 3
     });
   });

@@ -56,10 +56,16 @@ export interface ServerSecurityConfig {
   };
 }
 
+export interface ServerDictionaryConfig {
+  baseUrl: string;
+  timeoutMs: number;
+}
+
 export const serverConfig: {
   llm: ServerLlmConfig;
   storage: ServerStorageConfig;
   security: ServerSecurityConfig;
+  dictionary: ServerDictionaryConfig;
 } = {
   llm: {
     provider: "deepseek",
@@ -101,6 +107,10 @@ export const serverConfig: {
         thinking: null
       }
     }
+  },
+  dictionary: {
+    baseUrl: "https://api.dictionaryapi.dev/api/v2/entries/en",
+    timeoutMs: 5000
   },
   storage: {
     // File storage config: keep driver="file" and set sqlitePath to the DB file path.

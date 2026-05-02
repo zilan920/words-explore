@@ -29,6 +29,7 @@ import {
   learningGoalOptions,
   type LearningGoal
 } from "@/lib/learningGoals";
+import { appConfig } from "@/lib/appConfig";
 import type { UserState, WordAction, WordRecordRow } from "@/lib/types";
 
 type Tab = "study" | "history" | "settings";
@@ -74,9 +75,8 @@ const usernameKey = "words-explore.username";
 const accessTokenKey = "words-explore.accessToken";
 const themeKey = "words-explore.theme";
 const unknownAnswer = "我不认识";
-const studyQueueTargetSize = 3;
+const studyQueueTargetSize = clampNumber(appConfig.studyQueueTargetSize, 1, appConfig.wordBatchSize);
 const initialRecommendationCount = studyQueueTargetSize;
-const refillRecommendationCount = 1;
 const swipeExitMs = 320;
 const swipeHorizontalThreshold = 88;
 const swipeUpThreshold = 72;
@@ -473,7 +473,7 @@ export default function Home() {
     }
 
     const replaceCurrent = options?.replaceCurrent === true;
-    const requestedCount = options?.count ?? refillRecommendationCount;
+    const requestedCount = options?.count ?? 1;
     recommendationRequestRef.current = true;
 
     try {
@@ -611,10 +611,11 @@ export default function Home() {
       return;
     }
 
+    const missingStudyWords = Math.max(1, studyQueueTargetSize - queuedStudyWords.length);
     const count =
       queuedStudyWords.length === 0 && state.stats.totalWords === 0
         ? initialRecommendationCount
-        : refillRecommendationCount;
+        : missingStudyWords;
     void generateRecommendations({ count });
   }, [
     assessment,
@@ -1249,12 +1250,19 @@ function StudyView({
     );
   }
 
+  if (!currentWord && preparingWords) {
+    return (
+      <StudyCardLoader
+        queueTargetSize={queueTargetSize}
+        recommendationRetryAt={recommendationRetryAt}
+      />
+    );
+  }
+
   if (result && !currentWord && state.stats.totalWords === 0) {
     return (
       <ResultPanel
         result={result}
-        busy={preparingWords}
-        recommendationRetryAt={recommendationRetryAt}
         onGenerate={onGenerate}
       />
     );
@@ -1272,17 +1280,11 @@ function StudyView({
             <h2 className="mt-1 text-2xl font-black leading-tight text-ink">正在准备下一个单词</h2>
           </div>
         </div>
-        {preparingWords ? <GenerationStatus recommendationRetryAt={recommendationRetryAt} /> : null}
         <button
           className="button-base generate-button mt-6 w-full bg-leaf px-4 text-white shadow-press"
-          disabled={preparingWords}
           onClick={() => onGenerate({ count: initialRecommendationCount })}
         >
-          {preparingWords ? (
-            <Loader2 className="animate-spin" size={20} aria-hidden />
-          ) : (
-            <Sparkles size={20} aria-hidden />
-          )}
+          <Sparkles size={20} aria-hidden />
           开始学习
         </button>
       </div>
@@ -1476,15 +1478,67 @@ function StudyWordCard({
   );
 }
 
+function StudyCardLoader({
+  queueTargetSize,
+  recommendationRetryAt
+}: {
+  queueTargetSize: number;
+  recommendationRetryAt: number | null;
+}) {
+  const retrySeconds =
+    recommendationRetryAt && recommendationRetryAt > Date.now()
+      ? Math.max(1, Math.ceil((recommendationRetryAt - Date.now()) / 1000))
+      : null;
+
+  return (
+    <div className="study-card-focus" role="status" aria-live="polite">
+      <div className="single-card-stage loading-card-stage">
+        <div className="loading-stack-card loading-stack-card-2" aria-hidden />
+        <div className="loading-stack-card loading-stack-card-1" aria-hidden />
+        <article
+          className="word-card single-word-card loading-word-card rounded-lg border border-line bg-white p-4 shadow-soft"
+          aria-label={retrySeconds ? `正在等待服务恢复，约 ${retrySeconds} 秒` : "正在准备单词卡片"}
+        >
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <div className="loading-shimmer loading-word-title" />
+              <div className="loading-shimmer loading-word-meta mt-3" />
+            </div>
+            <div className="loading-shimmer loading-word-badge" />
+          </div>
+          <div className="loading-shimmer loading-definition mt-6" />
+          <div className="loading-shimmer loading-example mt-3" />
+          <div className="loading-shimmer loading-example loading-example-short mt-2" />
+          <div className="loading-reason mt-4">
+            <div className="loading-shimmer loading-reason-line" />
+            <div className="loading-shimmer loading-reason-line loading-reason-line-short" />
+          </div>
+          <div className="mt-5 grid grid-cols-3 gap-2" aria-hidden>
+            <div className="loading-shimmer loading-action" />
+            <div className="loading-shimmer loading-action" />
+            <div className="loading-shimmer loading-action" />
+          </div>
+          <div className="loading-card-footer mt-5 flex items-center justify-between gap-3 rounded-lg bg-mist px-3 py-2">
+            <span className="text-xs font-black text-steel">
+              {retrySeconds ? `服务恢复约 ${retrySeconds} 秒` : "词卡生成中"}
+            </span>
+            <span className="flex shrink-0 items-center gap-1" aria-hidden>
+              {Array.from({ length: queueTargetSize }, (_, index) => (
+                <span key={index} className="loading-queue-dot" />
+              ))}
+            </span>
+          </div>
+        </article>
+      </div>
+    </div>
+  );
+}
+
 function ResultPanel({
   result,
-  busy,
-  recommendationRetryAt,
   onGenerate
 }: {
   result: SubmitResult;
-  busy: boolean;
-  recommendationRetryAt: number | null;
   onGenerate: (options?: GenerateRecommendationsOptions) => void;
 }) {
   const levelSummary = getEstimatedLevelSummary(result.estimatedLevel, result.targetDifficulty);
@@ -1508,13 +1562,11 @@ function ResultPanel({
         <Metric label="等级" value={result.estimatedLevel} tone="steel" />
         <Metric label="目标" value={result.targetDifficulty} tone="amber" />
       </div>
-      {busy ? <GenerationStatus recommendationRetryAt={recommendationRetryAt} /> : null}
       <button
         className="button-base generate-button mt-6 w-full bg-leaf px-4 text-white shadow-press"
-        disabled={busy}
         onClick={() => onGenerate({ count: initialRecommendationCount })}
       >
-        {busy ? <Loader2 className="animate-spin" size={20} aria-hidden /> : <Sparkles size={20} aria-hidden />}
+        <Sparkles size={20} aria-hidden />
         开始学习
       </button>
     </div>
@@ -1532,28 +1584,6 @@ function getEstimatedLevelSummary(level: string, targetDifficulty: number): stri
           : "词汇基础较强，适合高阶学术词、抽象词和近义辨析。";
 
   return `${base} 后续推荐会从难度 ${targetDifficulty} 附近开始。`;
-}
-
-function GenerationStatus({
-  recommendationRetryAt
-}: {
-  recommendationRetryAt?: number | null;
-}) {
-  const retrySeconds =
-    recommendationRetryAt && recommendationRetryAt > Date.now()
-      ? Math.max(1, Math.ceil((recommendationRetryAt - Date.now()) / 1000))
-      : null;
-
-  return (
-    <div className="mt-4 flex min-h-11 items-center gap-2 rounded-lg border border-amber/25 bg-amber/10 px-3 text-sm font-bold text-amber">
-      <Loader2 className="shrink-0 animate-spin" size={16} aria-hidden />
-      <span>
-        {retrySeconds
-          ? `正在等待服务恢复，约 ${retrySeconds} 秒`
-          : "正在准备下一个单词"}
-      </span>
-    </div>
-  );
 }
 
 function HistoryView({

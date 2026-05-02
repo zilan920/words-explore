@@ -13,14 +13,14 @@ LLM_TEMPERATURE=0.6
 LLM_WORDS_PER_REQUEST=3
 ```
 
-The app calls `POST /chat/completions` through the OpenAI SDK and asks the provider to return `{ "words": [...] }` for each request, then streams accepted words to the UI through the app API.
+The app calls `POST /chat/completions` through the OpenAI SDK and asks the provider to return `{ "words": [...] }` for each request. The LLM only returns the word, difficulty, and a short learning note; part of speech, definitions, and examples are filled from the dictionary lookup service before accepted words are streamed to the UI.
 If the key is missing or the API call fails, recommendations fall back to local mock words so the learning flow still works.
 Use `WORDS_EXPLORE_LLM_API_KEY` for a provider-agnostic key; provider-specific keys such as `DEEPSEEK_API_KEY`, `OPENAI_API_KEY`, and `VOLCENGINE_API_KEY` are still supported as fallbacks.
 The server logs provider, model, timeout, token limit, temperature, words per request, and request duration without printing the API key.
-Provider-specific model, base URL, timeout, default temperature, default words per request, thinking mode, batch size, countdown, and storage mode live in TypeScript config.
+Provider-specific model, base URL, timeout, default temperature, default words per request, thinking mode, dictionary lookup, batch size, frontend study queue size, countdown, and storage mode live in TypeScript config.
 `serverConfig.llm.provider` selects the default provider, and `LLM_PROVIDER` can override it at runtime with a key from `serverConfig.llm.providers`, for example `deepseek`, `openai`, or `volcengine`.
 `LLM_TEMPERATURE` overrides the active provider's default. Valid temperature values are `0` to `2`.
-`LLM_WORDS_PER_REQUEST` overrides the active provider's words-per-request default. The default is `3` for the initial fill; subsequent UI refills request one word at a time.
+`LLM_WORDS_PER_REQUEST` overrides the active provider's words-per-request default. Frontend recommendation requests use `appConfig.studyQueueTargetSize` for the initial fill, then request the missing words needed to refill the queue.
 
 You can add another OpenAI-compatible provider by adding an entry under `serverConfig.llm.providers`, then select it with `serverConfig.llm.provider` or `LLM_PROVIDER`.
 
@@ -28,8 +28,8 @@ You can add another OpenAI-compatible provider by adding an entry under `serverC
 
 Non-secret runtime settings live in:
 
-- `src/lib/appConfig.ts`: word batch size and auto-next countdown.
-- `src/lib/serverConfig.ts`: LLM provider/model/base URL/default temperature/default words per request/thinking mode and storage driver/path.
+- `src/lib/appConfig.ts`: word batch size, frontend study queue target size, and auto-next countdown.
+- `src/lib/serverConfig.ts`: LLM provider/model/base URL/default temperature/default words per request/thinking mode, dictionary lookup base URL/timeout, and storage driver/path.
 
 ## Development
 
