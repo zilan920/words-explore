@@ -357,6 +357,7 @@ export class NodeSqliteStorage implements StorageAdapter {
       learnedWords: words.filter((word) => word.status === "learned").map((word) => word.word),
       tooEasyWords: words.filter((word) => word.status === "too_easy").map((word) => word.word),
       learningWords: words.filter((word) => word.status === "learning").map((word) => word.word),
+      unreviewedWords: words.filter((word) => word.status === "new").map((word) => word.word),
       recentWords: words.slice(0, 30).map((word) => word.word)
     };
   }
@@ -905,6 +906,7 @@ class LibsqlStorage implements StorageAdapter {
       learnedWords: words.filter((word) => word.status === "learned").map((word) => word.word),
       tooEasyWords: words.filter((word) => word.status === "too_easy").map((word) => word.word),
       learningWords: words.filter((word) => word.status === "learning").map((word) => word.word),
+      unreviewedWords: words.filter((word) => word.status === "new").map((word) => word.word),
       recentWords: words.slice(0, 30).map((word) => word.word)
     };
   }

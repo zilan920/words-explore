@@ -8,6 +8,7 @@ export interface ServerLlmProviderConfig {
   timeoutMs: number;
   maxTokens: number | null;
   temperature: number;
+  wordsPerRequest: number;
   thinking: ServerThinkingMode;
 }
 
@@ -69,6 +70,7 @@ export const serverConfig: {
       timeoutMs: 15000,
       maxTokens: null,
       temperature: 1.3,
+      wordsPerRequest: 5,
       thinking: "disabled"
     },
     openAiCompatible: {
@@ -77,6 +79,7 @@ export const serverConfig: {
       timeoutMs: 15000,
       maxTokens: null,
       temperature: 1.3,
+      wordsPerRequest: 5,
       thinking: null
     }
   },

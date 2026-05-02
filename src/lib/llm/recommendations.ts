@@ -1,7 +1,6 @@
 import OpenAI from "openai";
 import type {
   ChatCompletionCreateParamsNonStreaming,
-  ChatCompletionCreateParamsStreaming,
   ChatCompletionMessageParam
 } from "openai/resources/chat/completions";
 import { z } from "zod";
@@ -12,6 +11,7 @@ import { serverConfig, type ServerLlmConfig } from "@/lib/serverConfig";
 import type { LearningContext, RecommendationWordInput } from "@/lib/types";
 
 const { wordBatchSize } = appConfig;
+const maxSingleWordAttempts = wordBatchSize * 2;
 
 const compactText = (min: number, max: number) =>
   z
@@ -81,6 +81,7 @@ export interface LlmProviderConfig {
   timeoutMs: number;
   maxTokens: number | null;
   temperature: number;
+  wordsPerRequest: number;
   thinking: "enabled" | "disabled" | null;
 }
 
@@ -105,9 +106,10 @@ export async function recommendWords(context: LearningContext): Promise<Recommen
       timeoutMs: config.timeoutMs,
       maxTokens: config.maxTokens,
       temperature: config.temperature,
+      wordsPerRequest: config.wordsPerRequest,
       thinking: config.thinking
     });
-    const words = await callOpenAiCompatibleProvider(context, config);
+    const words = await callOpenAiCompatibleProviderBatch(context, config, { startedAt });
     console.info("[llm] recommendations generated", {
       provider: config.provider,
       model: config.model,
@@ -161,15 +163,25 @@ export async function streamRecommendationWords(
       maxTokens: config.maxTokens,
       temperature: config.temperature,
       thinking: config.thinking,
-      delimiter: WORD_DELIMITER
+      requestMode: "words-array-loop",
+      wordsPerRequest: config.wordsPerRequest
     });
 
-    const words = await callOpenAiCompatibleProviderStream(
+    const words = await callOpenAiCompatibleProviderBatch(
       context,
       config,
-      onEvent,
-      startedAt,
-      diagnostics
+      {
+        startedAt,
+        diagnostics,
+        onWord: (word, index) => {
+          onEvent({
+            type: "word",
+            source: config.provider,
+            word,
+            index
+          });
+        }
+      }
     );
     console.info("[llm] streaming recommendations generated", {
       requestId: diagnostics.requestId,
@@ -217,6 +229,10 @@ export function resolveLlmConfig(
         "DEEPSEEK_TEMPERATURE",
         "LLM_TEMPERATURE"
       ]),
+      wordsPerRequest: resolveWordsPerRequest(env, providerConfig.wordsPerRequest, [
+        "DEEPSEEK_WORDS_PER_REQUEST",
+        "LLM_WORDS_PER_REQUEST"
+      ]),
       thinking: providerConfig.thinking
     };
   }
@@ -235,6 +251,9 @@ export function resolveLlmConfig(
     timeoutMs: providerConfig.timeoutMs,
     maxTokens: providerConfig.maxTokens,
     temperature: resolveTemperature(env, providerConfig.temperature, ["LLM_TEMPERATURE"]),
+    wordsPerRequest: resolveWordsPerRequest(env, providerConfig.wordsPerRequest, [
+      "LLM_WORDS_PER_REQUEST"
+    ]),
     thinking: providerConfig.thinking
   };
 }
@@ -274,6 +293,30 @@ export function parseRecommendationText(content: string): RecommendationWordInpu
   return validateRecommendationWords(parseRecommendationCandidates(stripped, wordBatchSize));
 }
 
+export function parseRecommendationWordText(content: string): RecommendationWordInput {
+  const [word] = parseRecommendationCandidates(stripJsonFence(content), 1);
+  if (!word) {
+    throw new Error("No valid recommendation JSON found");
+  }
+
+  return validateRecommendationWord(word);
+}
+
+export function parseRecommendationWordBatchText(
+  content: string,
+  maxWords: number
+): RecommendationWordInput[] {
+  const words = parseRecommendationCandidates(stripJsonFence(content), maxWords).map((word) =>
+    validateRecommendationWord(word)
+  );
+
+  if (words.length === 0) {
+    throw new Error("No valid recommendation JSON found");
+  }
+
+  return uniqueByWord(words).slice(0, maxWords);
+}
+
 export function consumeDelimitedRecommendationWords(
   buffer: string,
   maxWords = wordBatchSize
@@ -308,41 +351,16 @@ export function consumeDelimitedRecommendationWords(
   return { words, remainder };
 }
 
-async function callOpenAiCompatibleProvider(
-  context: LearningContext,
-  config: LlmProviderConfig
-): Promise<RecommendationWordInput[]> {
-  const client = new OpenAI({
-    apiKey: config.apiKey,
-    baseURL: config.baseUrl,
-    timeout: config.timeoutMs,
-    maxRetries: 0
-  });
-  const requestBody = buildRequestBody(context, config);
-
-  try {
-    const completion = await client.chat.completions.create(requestBody, {
-      timeout: config.timeoutMs,
-      maxRetries: 0
-    });
-
-    const content = completion.choices[0]?.message?.content;
-    if (!content) {
-      throw new Error("LLM returned empty content");
-    }
-
-    return parseRecommendationText(content);
-  } catch (error) {
-    throw normalizeSdkError(error, config);
-  }
+interface BatchGenerationOptions {
+  startedAt: number;
+  diagnostics?: RecommendationDiagnosticsOptions;
+  onWord?: (word: RecommendationWordInput, index: number) => void;
 }
 
-async function callOpenAiCompatibleProviderStream(
+async function callOpenAiCompatibleProviderBatch(
   context: LearningContext,
   config: LlmProviderConfig,
-  onEvent: (event: RecommendationStreamEvent) => void,
-  startedAt: number,
-  diagnostics: RecommendationDiagnosticsOptions
+  options: BatchGenerationOptions
 ): Promise<RecommendationWordInput[]> {
   const client = new OpenAI({
     apiKey: config.apiKey,
@@ -350,139 +368,157 @@ async function callOpenAiCompatibleProviderStream(
     timeout: config.timeoutMs,
     maxRetries: 0
   });
-  const requestBody = buildStreamingRequestBody(context, config);
   const words: RecommendationWordInput[] = [];
-  let buffer = "";
-  let sawThinking = false;
-  let firstContentAt: number | null = null;
+  const diagnostics = options.diagnostics ?? {};
   let firstWordAt: number | null = null;
-  let contentChunks = 0;
-  let reasoningChunks = 0;
+  let attempts = 0;
   let outputChars = 0;
-  let parseStage:
-    | "create_stream"
-    | "read_stream"
-    | "parse_delimited_segments"
-    | "parse_tail"
-    | "validate_words" = "create_stream";
   let diagnosticContent = "";
 
   try {
-    const stream = await client.chat.completions.create(requestBody, {
-      timeout: config.timeoutMs,
-      maxRetries: 0
-    });
+    while (words.length < wordBatchSize && attempts < maxSingleWordAttempts) {
+      attempts += 1;
+      const requestStartedAt = Date.now();
+      const requestWordCount = Math.min(config.wordsPerRequest, wordBatchSize - words.length);
+      const requestBody = buildRequestBody(
+        context,
+        config,
+        getUnreviewedWordsForPrompt(context, words),
+        requestWordCount
+      );
+      const completion = await client.chat.completions.create(requestBody, {
+        timeout: config.timeoutMs,
+        maxRetries: 0
+      });
 
-    parseStage = "read_stream";
-    for await (const chunk of stream) {
-      const delta = chunk.choices[0]?.delta as ChatDeltaWithReasoning | undefined;
-      const reasoningContent = delta?.reasoning_content;
-      const content = delta?.content;
+      const content = completion.choices[0]?.message?.content;
+      if (!content) {
+        console.warn("[llm] recommendation batch rejected; retrying", {
+          requestId: diagnostics.requestId,
+          provider: config.provider,
+          model: config.model,
+          attempt: attempts,
+          reason: "empty_content",
+          wordsParsed: words.length,
+          durationMs: Date.now() - requestStartedAt
+        });
+        continue;
+      }
 
-      if (reasoningContent) {
-        reasoningChunks += 1;
-        if (!sawThinking) {
-          sawThinking = true;
-          console.info("[llm] streaming reasoning detected", {
+      outputChars += content.length;
+      diagnosticContent = appendDiagnosticContent(diagnosticContent, content);
+      let parsedWords: RecommendationWordInput[];
+      try {
+        parsedWords = parseRecommendationWordBatchText(content, requestWordCount);
+      } catch (error) {
+        console.warn("[llm] recommendation batch parse failed; retrying", {
+          requestId: diagnostics.requestId,
+          provider: config.provider,
+          model: config.model,
+          attempt: attempts,
+          wordsParsed: words.length,
+          requestedWords: requestWordCount,
+          outputLast: diagnosticSnippet(content, "last"),
+          error: error instanceof Error ? error.message : String(error),
+          durationMs: Date.now() - requestStartedAt
+        });
+        continue;
+      }
+
+      let acceptedCount = 0;
+      for (const word of parsedWords) {
+        if (words.length >= wordBatchSize) {
+          break;
+        }
+
+        if (isBlockedRecommendationWord(context, words, word.word)) {
+          console.warn("[llm] recommendation word rejected", {
             requestId: diagnostics.requestId,
             provider: config.provider,
             model: config.model,
-            firstReasoningMs: Date.now() - startedAt
+            attempt: attempts,
+            word: word.word,
+            reason: "duplicate_or_blocked",
+            wordsParsed: words.length
           });
-          onEvent({ type: "thinking" });
-        }
-      }
-
-      if (!content) {
-        continue;
-      }
-
-      contentChunks += 1;
-      outputChars += content.length;
-      firstContentAt ??= Date.now();
-      diagnosticContent = appendDiagnosticContent(diagnosticContent, content);
-      if (words.length >= wordBatchSize) {
-        continue;
-      }
-
-      buffer += content;
-      parseStage = "parse_delimited_segments";
-      const parsed = consumeDelimitedRecommendationWords(buffer, wordBatchSize - words.length);
-      buffer = parsed.remainder;
-      parseStage = "read_stream";
-
-      for (const word of parsed.words) {
-        if (words.length >= wordBatchSize || hasRecommendationWord(words, word.word)) {
           continue;
         }
 
         words.push(word);
+        acceptedCount += 1;
         firstWordAt ??= Date.now();
-        onEvent({
-          type: "word",
-          source: config.provider,
-          word,
-          index: words.length
+        options.onWord?.(word, words.length);
+        console.info("[llm] recommendation word generated", {
+          requestId: diagnostics.requestId,
+          provider: config.provider,
+          model: config.model,
+          attempt: attempts,
+          index: words.length,
+          word: word.word
         });
       }
+
+      if (acceptedCount === 0) {
+        console.warn("[llm] recommendation batch rejected; retrying", {
+          requestId: diagnostics.requestId,
+          provider: config.provider,
+          model: config.model,
+          attempt: attempts,
+          reason: "no_accepted_words",
+          requestedWords: requestWordCount,
+          returnedWords: parsedWords.length,
+          wordsParsed: words.length,
+          durationMs: Date.now() - requestStartedAt
+        });
+        continue;
+      }
+
+      console.info("[llm] recommendation batch generated", {
+        requestId: diagnostics.requestId,
+        provider: config.provider,
+        model: config.model,
+        attempt: attempts,
+        requestedWords: requestWordCount,
+        returnedWords: parsedWords.length,
+        acceptedWords: acceptedCount,
+        wordsParsed: words.length,
+        durationMs: Date.now() - requestStartedAt
+      });
     }
 
     if (words.length < wordBatchSize) {
-      parseStage = "parse_tail";
-      for (const word of parseStreamingRecommendationTail(buffer, words.length, words)) {
-        if (words.length >= wordBatchSize || hasRecommendationWord(words, word.word)) {
-          continue;
-        }
-
-        words.push(word);
-        firstWordAt ??= Date.now();
-        onEvent({
-          type: "word",
-          source: config.provider,
-          word,
-          index: words.length
-        });
-      }
+      throw new Error(
+        `LLM generated ${words.length}/${wordBatchSize} valid recommendation words after ${attempts} attempts`
+      );
     }
 
-    parseStage = "validate_words";
     const validatedWords = validateRecommendationWords(words);
-    console.info("[llm] streaming telemetry", {
+    console.info("[llm] words-array batch telemetry", {
       requestId: diagnostics.requestId,
       provider: config.provider,
       model: config.model,
-      contentChunks,
-      reasoningChunks,
+      attempts,
       wordsParsed: words.length,
       outputChars,
       outputSampleChars: diagnosticContent.length,
       outputSampleTruncated: outputChars > diagnosticContent.length,
-      outputDelimiters: countOccurrences(diagnosticContent, WORD_DELIMITER),
-      firstContentMs: firstContentAt ? firstContentAt - startedAt : null,
-      firstWordMs: firstWordAt ? firstWordAt - startedAt : null,
-      durationMs: Date.now() - startedAt
+      firstWordMs: firstWordAt ? firstWordAt - options.startedAt : null,
+      durationMs: Date.now() - options.startedAt
     });
 
     return validatedWords;
   } catch (error) {
-    console.warn("[llm] streaming parse diagnostics", {
+    console.warn("[llm] words-array batch diagnostics", {
       requestId: diagnostics.requestId,
       provider: config.provider,
       model: config.model,
-      stage: parseStage,
-      contentChunks,
-      reasoningChunks,
+      attempts,
       wordsParsed: words.length,
-      bufferChars: buffer.length,
-      bufferDelimiters: countOccurrences(buffer, WORD_DELIMITER),
       outputChars,
       outputSampleChars: diagnosticContent.length,
       outputSampleTruncated: outputChars > diagnosticContent.length,
-      outputDelimiters: countOccurrences(diagnosticContent, WORD_DELIMITER),
       outputFirst: diagnosticSnippet(diagnosticContent, "first"),
       outputLast: diagnosticSnippet(diagnosticContent, "last"),
-      bufferFirst: diagnosticSnippet(buffer, "first"),
-      bufferLast: diagnosticSnippet(buffer, "last"),
       error: error instanceof Error ? error.message : String(error)
     });
     throw normalizeSdkError(error, config);
@@ -495,47 +531,27 @@ type DeepSeekThinking = {
   };
 };
 
-type ChatDeltaWithReasoning = {
-  content?: string | null;
-  reasoning_content?: string | null;
-};
-
 function buildRequestBody(
   context: LearningContext,
-  config: LlmProviderConfig
+  config: LlmProviderConfig,
+  acquiredWords: string[],
+  wordCount: number
 ): ChatCompletionCreateParamsNonStreaming & DeepSeekThinking {
-  return buildRequestBodyBase(context, config);
-}
-
-function buildStreamingRequestBody(
-  context: LearningContext,
-  config: LlmProviderConfig
-): ChatCompletionCreateParamsStreaming & DeepSeekThinking {
-  return {
-    ...buildRequestBodyBase(context, config),
-    stream: true
-  };
-}
-
-function buildRequestBodyBase(
-  context: LearningContext,
-  config: LlmProviderConfig
-): Omit<ChatCompletionCreateParamsNonStreaming, "stream"> & DeepSeekThinking {
   const messages: ChatCompletionMessageParam[] = [
     {
       role: "system",
-      content:
-        "你是英语词汇教练。只输出独立 JSON object 和指定分隔符，不要 Markdown，不要额外解释。"
+      content: "你是英语词汇教练。只输出 1 个独立 JSON object，不要 Markdown，不要额外解释。"
     },
     {
       role: "user",
-      content: buildRecommendationPrompt(context)
+      content: buildRecommendationPrompt(context, { acquiredWords, wordCount })
     }
   ];
 
   return {
     model: config.model,
     temperature: config.temperature,
+    response_format: { type: "json_object" },
     ...(config.maxTokens ? { max_tokens: config.maxTokens } : {}),
     ...(config.thinking ? { thinking: { type: config.thinking } } : {}),
     messages
@@ -685,22 +701,6 @@ function appendDiagnosticContent(current: string, next: string): string {
   return (current + next).slice(0, diagnosticContentLimit);
 }
 
-function countOccurrences(content: string, needle: string): number {
-  if (!content || !needle) {
-    return 0;
-  }
-
-  let count = 0;
-  let index = content.indexOf(needle);
-
-  while (index >= 0) {
-    count += 1;
-    index = content.indexOf(needle, index + needle.length);
-  }
-
-  return count;
-}
-
 function diagnosticSnippet(content: string, side: "first" | "last"): string | null {
   const normalized = content.replace(/\s+/g, " ").trim();
   if (!normalized) {
@@ -846,6 +846,37 @@ function resolveTemperature(
   return defaultTemperature;
 }
 
+function resolveWordsPerRequest(
+  env: Record<string, string | undefined>,
+  defaultWordsPerRequest: number,
+  keys: string[]
+): number {
+  const raw = keys.map((key) => env[key]?.trim()).find((value) => value);
+  if (!raw) {
+    return clampWordsPerRequest(defaultWordsPerRequest);
+  }
+
+  const parsed = Number(raw);
+  if (Number.isInteger(parsed) && parsed >= 1 && parsed <= wordBatchSize) {
+    return parsed;
+  }
+
+  console.warn("[llm] invalid words-per-request env; using TypeScript config default", {
+    keys,
+    value: raw,
+    defaultWordsPerRequest
+  });
+  return clampWordsPerRequest(defaultWordsPerRequest);
+}
+
+function clampWordsPerRequest(value: number): number {
+  if (!Number.isInteger(value)) {
+    return 1;
+  }
+
+  return Math.min(wordBatchSize, Math.max(1, value));
+}
+
 function sanitizeProviderError(detail: string): string {
   return detail
     .slice(0, 220)
@@ -856,9 +887,12 @@ function sanitizeProviderError(detail: string): string {
 function mockRecommendations(context: LearningContext): RecommendationResult {
   const pool = goalMockPools[context.learningGoal] ?? mockPool;
   const blocked = new Set(
-    [...context.learnedWords, ...context.tooEasyWords, ...context.recentWords].map((word) =>
-      word.toLowerCase()
-    )
+    [
+      ...context.learnedWords,
+      ...context.tooEasyWords,
+      ...context.unreviewedWords,
+      ...context.recentWords
+    ].map((word) => word.toLowerCase())
   );
   const preferred = pool
     .filter((word) => Math.abs(word.difficulty - context.targetDifficulty) <= 2)
@@ -884,9 +918,44 @@ function uniqueByWord(words: RecommendationWordInput[]): RecommendationWordInput
   });
 }
 
-function hasRecommendationWord(words: RecommendationWordInput[], nextWord: string): boolean {
+function getUnreviewedWordsForPrompt(
+  context: LearningContext,
+  generatedWords: RecommendationWordInput[]
+): string[] {
+  return uniqueStrings([
+    ...context.unreviewedWords,
+    ...generatedWords.map((word) => word.word)
+  ]);
+}
+
+function isBlockedRecommendationWord(
+  context: LearningContext,
+  generatedWords: RecommendationWordInput[],
+  nextWord: string
+): boolean {
   const key = nextWord.toLowerCase();
-  return words.some((word) => word.word.toLowerCase() === key);
+  const blocked = new Set(
+    [
+      ...context.learnedWords,
+      ...context.tooEasyWords,
+      ...context.unreviewedWords,
+      ...generatedWords.map((word) => word.word)
+    ].map((word) => word.toLowerCase())
+  );
+
+  return blocked.has(key);
+}
+
+function uniqueStrings(words: string[]): string[] {
+  const seen = new Set<string>();
+  return words.filter((word) => {
+    const key = word.toLowerCase();
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
 }
 
 const mockPool: RecommendationWordInput[] = [

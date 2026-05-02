@@ -98,6 +98,7 @@ export interface LearningContext {
   learnedWords: string[];
   tooEasyWords: string[];
   learningWords: string[];
+  unreviewedWords: string[];
   recentWords: string[];
 }
 

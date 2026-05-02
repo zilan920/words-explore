@@ -82,6 +82,7 @@ export async function POST(request: Request) {
             learnedWords: context.learnedWords.length,
             tooEasyWords: context.tooEasyWords.length,
             learningWords: context.learningWords.length,
+            unreviewedWords: context.unreviewedWords.length,
             recentWords: context.recentWords.length
           });
 

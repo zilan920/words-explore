@@ -4,6 +4,7 @@ import { buildRecommendationPrompt, WORD_DELIMITER } from "@/lib/llm/recommendat
 import {
   consumeDelimitedRecommendationWords,
   parseRecommendationText,
+  parseRecommendationWordBatchText,
   parseStreamingRecommendationTail,
   resolveLlmConfig,
   validateRecommendationWords
@@ -124,6 +125,14 @@ describe("recommendation validation", () => {
     expect(parsed[0].difficulty).toBe(7);
   });
 
+  it("parses a configured words array response", () => {
+    const words = wordList(3);
+
+    expect(parseRecommendationWordBatchText(JSON.stringify({ words }), 3).map((word) => word.word)).toEqual(
+      words.map((word) => word.word)
+    );
+  });
+
   it("repairs a missing comma before a known recommendation field", () => {
     const words = wordList();
     const malformedFirstWord = JSON.stringify(words[0]).replace(
@@ -215,23 +224,35 @@ describe("recommendation validation", () => {
 });
 
 describe("recommendation prompt", () => {
-  it("uses plain text instructions with the streaming delimiter", () => {
-    const prompt = buildRecommendationPrompt({
-      learningGoal: "ielts",
-      targetDifficulty: 7,
-      estimatedLevel: "B2",
-      learnedWords: ["coherent"],
-      tooEasyWords: ["simple"],
-      learningWords: ["nuance"],
-      recentWords: ["subtle"]
-    });
+  it("asks for a configured words array and keeps changing learner data at the end", () => {
+    const prompt = buildRecommendationPrompt(
+      {
+        learningGoal: "ielts",
+        targetDifficulty: 7,
+        estimatedLevel: "B2",
+        learnedWords: ["coherent"],
+        tooEasyWords: ["simple"],
+        learningWords: ["nuance"],
+        unreviewedWords: ["pending"],
+        recentWords: ["subtle"]
+      },
+      {
+        acquiredWords: ["subtle", "pending"],
+        wordCount: 3
+      }
+    );
 
     expect(prompt.trim().startsWith("{")).toBe(false);
-    expect(prompt).toContain(WORD_DELIMITER);
-    expect(prompt).toContain(`推荐下一批 ${appConfig.wordBatchSize} 个`);
+    expect(prompt).not.toContain(WORD_DELIMITER);
+    expect(prompt).toContain("推荐 3 个");
+    expect(prompt).toContain('{"words": [...]}');
+    expect(prompt).toContain("长度为 3 的 JSON array");
     expect(prompt).toContain("学习目标：雅思");
-    expect(prompt).toContain("已学会词：coherent");
-    expect(prompt).toContain("太简单词：simple");
+    expect(prompt).toContain("学会的单词：coherent");
+    expect(prompt).toContain("太简单的单词：simple");
+    expect(prompt).toContain("生词簿：nuance");
+    expect(prompt).toContain("已获取但还没有反馈的单词：pending, subtle");
+    expect(prompt.lastIndexOf("学习者信息")).toBeGreaterThan(prompt.indexOf("单个 JSON object 示例"));
   });
 });
 
@@ -258,6 +279,7 @@ describe("LLM provider config", () => {
       timeoutMs: 15000,
       maxTokens: null,
       temperature: 1.3,
+      wordsPerRequest: 5,
       thinking: "disabled"
     });
   });
@@ -318,6 +340,7 @@ describe("LLM provider config", () => {
         timeoutMs: 7000,
         maxTokens: 1000,
         temperature: 1.1,
+        wordsPerRequest: 4,
         thinking: null
       }
     };
@@ -334,8 +357,42 @@ describe("LLM provider config", () => {
       timeoutMs: 7000,
       maxTokens: 1000,
       temperature: 1.1,
+      wordsPerRequest: 4,
       thinking: null
     });
+  });
+
+  it("allows DEEPSEEK_WORDS_PER_REQUEST to override DeepSeek words per request", () => {
+    expect(
+      resolveLlmConfig({
+        DEEPSEEK_API_KEY: "deepseek-key",
+        LLM_WORDS_PER_REQUEST: "5",
+        DEEPSEEK_WORDS_PER_REQUEST: "2"
+      })?.wordsPerRequest
+    ).toBe(2);
+  });
+
+  it("allows LLM_WORDS_PER_REQUEST to override OpenAI-compatible words per request", () => {
+    const config: ServerLlmConfig = {
+      ...serverConfig.llm,
+      provider: "openai-compatible",
+      openAiCompatible: {
+        baseUrl: "https://provider.example.com/v1/",
+        model: "provider-model",
+        timeoutMs: 7000,
+        maxTokens: 1000,
+        temperature: 1.1,
+        wordsPerRequest: 4,
+        thinking: null
+      }
+    };
+
+    expect(
+      resolveLlmConfig({
+        LLM_API_KEY: "generic-key",
+        LLM_WORDS_PER_REQUEST: "6"
+      }, config)?.wordsPerRequest
+    ).toBe(6);
   });
 
   it("allows LLM_TEMPERATURE to override OpenAI-compatible temperature", () => {
@@ -348,6 +405,7 @@ describe("LLM provider config", () => {
         timeoutMs: 7000,
         maxTokens: 1000,
         temperature: 1.1,
+        wordsPerRequest: 4,
         thinking: null
       }
     };
