@@ -1,4 +1,4 @@
-export type ServerLlmProvider = "deepseek" | "openai-compatible";
+export type ServerLlmProvider = string;
 export type ServerStorageDriver = "file" | "libsql";
 export type ServerThinkingMode = "enabled" | "disabled" | null;
 
@@ -14,8 +14,7 @@ export interface ServerLlmProviderConfig {
 
 export interface ServerLlmConfig {
   provider: ServerLlmProvider;
-  deepseek: ServerLlmProviderConfig;
-  openAiCompatible: ServerLlmProviderConfig;
+  providers: Record<ServerLlmProvider, ServerLlmProviderConfig>;
 }
 
 export interface ServerStorageConfig {
@@ -64,23 +63,43 @@ export const serverConfig: {
 } = {
   llm: {
     provider: "deepseek",
-    deepseek: {
-      baseUrl: "https://api.deepseek.com",
-      model: "deepseek-v4-flash",
-      timeoutMs: 15000,
-      maxTokens: null,
-      temperature: 1.3,
-      wordsPerRequest: 5,
-      thinking: "disabled"
-    },
-    openAiCompatible: {
-      baseUrl: "https://api.openai.com/v1",
-      model: "gpt-4.1-mini",
-      timeoutMs: 15000,
-      maxTokens: null,
-      temperature: 1.3,
-      wordsPerRequest: 5,
-      thinking: null
+    providers: {
+      deepseek: {
+        baseUrl: "https://api.deepseek.com",
+        model: "deepseek-v4-flash",
+        timeoutMs: 15000,
+        maxTokens: null,
+        temperature: 1.3,
+        wordsPerRequest: 5,
+        thinking: "disabled"
+      },
+      openai: {
+        baseUrl: "https://api.openai.com/v1",
+        model: "gpt-4.1-mini",
+        timeoutMs: 15000,
+        maxTokens: null,
+        temperature: 1.3,
+        wordsPerRequest: 5,
+        thinking: null
+      },
+      volcengine: {
+        baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
+        model: "doubao-seed-1-6-flash-250615",
+        timeoutMs: 15000,
+        maxTokens: null,
+        temperature: 1.3,
+        wordsPerRequest: 5,
+        thinking: null
+      },
+      "openai-compatible": {
+        baseUrl: "https://api.openai.com/v1",
+        model: "gpt-4.1-mini",
+        timeoutMs: 15000,
+        maxTokens: null,
+        temperature: 1.3,
+        wordsPerRequest: 5,
+        thinking: null
+      }
     }
   },
   storage: {

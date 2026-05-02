@@ -5,6 +5,7 @@ import { appConfig } from "@/lib/appConfig";
 import { getStorage, type StorageAdapter } from "@/lib/db/storage";
 import { streamRecommendationWords, type RecommendationStreamEvent } from "@/lib/llm/recommendations";
 import { serverConfig } from "@/lib/serverConfig";
+import type { RecommendationBatchRow, WordRecordRow } from "@/lib/types";
 import {
   acquireRequestLock,
   enforceRateLimit,
@@ -69,16 +70,62 @@ export async function POST(request: Request) {
   }
 
   const encoder = new TextEncoder();
+  let closed = false;
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
-      const send = (event: string, data: unknown) => {
-        controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+      const send = (event: string, data: unknown): boolean => {
+        if (closed) {
+          return false;
+        }
+
+        try {
+          controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+          return true;
+        } catch (error) {
+          closed = true;
+          console.info("[api/recommendations/stream] client disconnected", {
+            requestId,
+            username,
+            event,
+            error: error instanceof Error ? error.message : String(error)
+          });
+          return false;
+        }
+      };
+      const close = () => {
+        if (closed) {
+          return;
+        }
+
+        try {
+          controller.close();
+        } catch {
+          // The client may have already closed the SSE connection.
+        } finally {
+          closed = true;
+        }
       };
 
       void (async () => {
         try {
           const context = await storage.getLearningContext(username);
           let thinking = false;
+          let lastBatch: RecommendationBatchRow | null = null;
+          const persistedWords: WordRecordRow[] = [];
+          const ensureStreamBatch = async (source: string): Promise<RecommendationBatchRow> => {
+            if (lastBatch) {
+              return lastBatch;
+            }
+
+            const persisted = await storage.createRecommendationBatch(
+              username,
+              [],
+              source,
+              context.targetDifficulty
+            );
+            lastBatch = persisted.batch;
+            return persisted.batch;
+          };
           console.info("[api/recommendations/stream] context loaded", {
             requestId,
             username,
@@ -91,13 +138,15 @@ export async function POST(request: Request) {
             recentWords: context.recentWords.length
           });
 
-          const result = await streamRecommendationWords(context, (event: RecommendationStreamEvent) => {
+          const result = await streamRecommendationWords(context, async (event: RecommendationStreamEvent) => {
             if (event.type === "start") {
-              send("status", {
+              if (!send("status", {
                 source: event.source,
                 model: event.model,
                 thinkingMode: event.thinking
-              });
+              })) {
+                return;
+              }
               return;
             }
 
@@ -108,6 +157,9 @@ export async function POST(request: Request) {
             }
 
             if (event.type === "fallback") {
+              if (closed) {
+                return;
+              }
               thinking = false;
               console.warn("[api/recommendations/stream] llm fallback", {
                 requestId,
@@ -118,54 +170,75 @@ export async function POST(request: Request) {
               return;
             }
 
+            if (closed) {
+              return;
+            }
+            const batch = await ensureStreamBatch(event.source);
+            const word = await storage.appendRecommendationWord(
+              username,
+              batch.id,
+              event.word,
+              persistedWords.length
+            );
+            persistedWords.push(word);
             send("word", {
               source: event.source,
               index: event.index,
-              word: event.word
+              word
             });
           }, { requestId, wordCount: requestedWords });
 
-          console.info("[api/recommendations/stream] creating batch", {
+          console.info("[api/recommendations/stream] persisted stream words", {
             requestId,
             username,
             source: result.source,
-            wordCount: result.words.length,
+            wordCount: persistedWords.length,
             requestedWords
           });
 
-          const batch = await storage.createRecommendationBatch(
-            username,
-            result.words,
-            result.source,
-            context.targetDifficulty
-          );
+          if (closed) {
+            return;
+          }
+
+          if (persistedWords.length === 0 && result.words.length > 0) {
+            const persisted = await storage.createRecommendationBatch(
+              username,
+              result.words,
+              result.source,
+              context.targetDifficulty
+            );
+            lastBatch = persisted.batch;
+            persistedWords.push(...persisted.words);
+          }
           const state = await storage.getUserState(username);
 
           console.info("[api/recommendations/stream] completed", {
             requestId,
             username,
             source: result.source,
-            wordCount: batch.words.length,
-            batchId: batch.batch.id,
+            wordCount: persistedWords.length,
+            batchId: lastBatch?.id ?? null,
             thinking
           });
 
           send("complete", {
             source: result.source,
             thinking,
-            batch: batch.batch,
-            words: batch.words,
+            batch: lastBatch,
+            words: persistedWords,
             state
           });
-          controller.close();
+          close();
         } catch (error) {
-          console.warn("[api/recommendations/stream] failed", {
-            requestId,
-            username,
-            error: error instanceof Error ? error.message : String(error)
-          });
-          send("error", { error: "推荐失败，请稍后再试" });
-          controller.close();
+          if (!closed) {
+            console.warn("[api/recommendations/stream] failed", {
+              requestId,
+              username,
+              error: error instanceof Error ? error.message : String(error)
+            });
+            send("error", { error: "推荐失败，请稍后再试" });
+            close();
+          }
         } finally {
           try {
             await releaseLock();
@@ -178,6 +251,9 @@ export async function POST(request: Request) {
           }
         }
       })();
+    },
+    cancel() {
+      closed = true;
     }
   });
 

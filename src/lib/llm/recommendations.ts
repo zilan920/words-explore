@@ -42,7 +42,7 @@ const recommendationSchema = z.object({
 });
 
 export interface RecommendationResult {
-  source: "deepseek" | "openai-compatible" | "mock";
+  source: string;
   words: RecommendationWordInput[];
 }
 
@@ -73,7 +73,7 @@ export interface DelimitedRecommendationParseResult {
 }
 
 export interface LlmProviderConfig {
-  provider: "deepseek" | "openai-compatible";
+  provider: string;
   apiKey: string;
   baseUrl: string;
   model: string;
@@ -139,7 +139,7 @@ export async function recommendWords(
 
 export async function streamRecommendationWords(
   context: LearningContext,
-  onEvent: (event: RecommendationStreamEvent) => void,
+  onEvent: (event: RecommendationStreamEvent) => void | Promise<void>,
   diagnostics: RecommendationDiagnosticsOptions = {}
 ): Promise<RecommendationResult> {
   const targetWordCount = normalizeRequestedWordCount(diagnostics.wordCount);
@@ -150,13 +150,13 @@ export async function streamRecommendationWords(
       requestedWords: targetWordCount
     });
     const result = mockRecommendations(context, targetWordCount);
-    onEvent({ type: "fallback", reason: "missing_provider_config" });
-    emitRecommendationWords(result, onEvent);
+    await onEvent({ type: "fallback", reason: "missing_provider_config" });
+    await emitRecommendationWords(result, onEvent);
     return result;
   }
 
   const startedAt = Date.now();
-  onEvent({
+  await onEvent({
     type: "start",
     source: config.provider,
     model: config.model,
@@ -186,8 +186,8 @@ export async function streamRecommendationWords(
         startedAt,
         diagnostics,
         wordCount: targetWordCount,
-        onWord: (word, index) => {
-          onEvent({
+        onWord: async (word, index) => {
+          await onEvent({
             type: "word",
             source: config.provider,
             word,
@@ -214,8 +214,8 @@ export async function streamRecommendationWords(
       error: reason
     });
     const result = mockRecommendations(context, targetWordCount);
-    onEvent({ type: "fallback", reason: sanitizeProviderError(reason) });
-    emitRecommendationWords(result, onEvent);
+    await onEvent({ type: "fallback", reason: sanitizeProviderError(reason) });
+    await emitRecommendationWords(result, onEvent);
     return result;
   }
 }
@@ -224,49 +224,33 @@ export function resolveLlmConfig(
   env: Record<string, string | undefined> = process.env,
   config: ServerLlmConfig = serverConfig.llm
 ): LlmProviderConfig | null {
-  if (config.provider === "deepseek") {
-    const apiKey = env.DEEPSEEK_API_KEY ?? env.LLM_API_KEY;
-    if (!apiKey) {
-      return null;
-    }
-    const providerConfig = config.deepseek;
-
-    return {
-      provider: "deepseek",
-      apiKey: normalizeEnvValue(apiKey),
-      baseUrl: normalizeBaseUrl(providerConfig.baseUrl),
-      model: providerConfig.model,
-      timeoutMs: providerConfig.timeoutMs,
-      maxTokens: providerConfig.maxTokens,
-      temperature: resolveTemperature(env, providerConfig.temperature, [
-        "DEEPSEEK_TEMPERATURE",
-        "LLM_TEMPERATURE"
-      ]),
-      wordsPerRequest: resolveWordsPerRequest(env, providerConfig.wordsPerRequest, [
-        "DEEPSEEK_WORDS_PER_REQUEST",
-        "LLM_WORDS_PER_REQUEST"
-      ]),
-      thinking: providerConfig.thinking
-    };
+  const provider = resolveProviderName(env, config);
+  if (!provider) {
+    return null;
   }
 
-  const apiKey = env.LLM_API_KEY;
+  const providerConfig = config.providers[provider];
+  const apiKey = resolveProviderApiKey(env, provider);
   if (!apiKey) {
     return null;
   }
-  const providerConfig = config.openAiCompatible;
 
   return {
-    provider: "openai-compatible",
-    apiKey: normalizeEnvValue(apiKey),
+    provider,
+    apiKey,
     baseUrl: normalizeBaseUrl(providerConfig.baseUrl),
     model: providerConfig.model,
     timeoutMs: providerConfig.timeoutMs,
     maxTokens: providerConfig.maxTokens,
-    temperature: resolveTemperature(env, providerConfig.temperature, ["LLM_TEMPERATURE"]),
-    wordsPerRequest: resolveWordsPerRequest(env, providerConfig.wordsPerRequest, [
-      "LLM_WORDS_PER_REQUEST"
+    temperature: resolveTemperature(env, providerConfig.temperature, [
+      "LLM_TEMPERATURE",
+      ...legacyProviderEnvVars(provider).temperature
     ]),
+    wordsPerRequest: resolveWordsPerRequest(
+      env,
+      providerConfig.wordsPerRequest,
+      ["LLM_WORDS_PER_REQUEST", ...legacyProviderEnvVars(provider).wordsPerRequest]
+    ),
     thinking: providerConfig.thinking
   };
 }
@@ -382,7 +366,7 @@ interface BatchGenerationOptions {
   startedAt: number;
   wordCount: number;
   diagnostics?: RecommendationDiagnosticsOptions;
-  onWord?: (word: RecommendationWordInput, index: number) => void;
+  onWord?: (word: RecommendationWordInput, index: number) => void | Promise<void>;
 }
 
 async function callOpenAiCompatibleProviderBatch(
@@ -480,7 +464,7 @@ async function callOpenAiCompatibleProviderBatch(
         words.push(word);
         acceptedCount += 1;
         firstWordAt ??= Date.now();
-        options.onWord?.(word, words.length);
+        await options.onWord?.(word, words.length);
         console.info("[llm] recommendation word generated", {
           requestId: diagnostics.requestId,
           provider: config.provider,
@@ -836,16 +820,17 @@ function extractJsonCandidates(content: string): unknown[] {
 
 function emitRecommendationWords(
   result: RecommendationResult,
-  onEvent: (event: RecommendationStreamEvent) => void
-): void {
-  result.words.forEach((word, index) => {
-    onEvent({
+  onEvent: (event: RecommendationStreamEvent) => void | Promise<void>
+): Promise<void> {
+  return result.words.reduce<Promise<void>>(async (previous, word, index) => {
+    await previous;
+    await onEvent({
       type: "word",
       source: result.source,
       word,
       index: index + 1
     });
-  });
+  }, Promise.resolve());
 }
 
 function normalizeBaseUrl(baseUrl: string): string {
@@ -854,6 +839,77 @@ function normalizeBaseUrl(baseUrl: string): string {
 
 function normalizeEnvValue(value: string): string {
   return value.trim();
+}
+
+function resolveProviderName(
+  env: Record<string, string | undefined>,
+  config: ServerLlmConfig
+): string | null {
+  const requestedProvider = env.LLM_PROVIDER?.trim() || config.provider;
+  const matchedProvider = findConfiguredProvider(config, requestedProvider);
+  if (matchedProvider) {
+    return matchedProvider;
+  }
+
+  const fallbackProvider = findConfiguredProvider(config, config.provider);
+  console.warn("[llm] invalid provider config; using fallback when available", {
+    requestedProvider,
+    fallbackProvider,
+    availableProviders: Object.keys(config.providers)
+  });
+
+  return fallbackProvider;
+}
+
+function findConfiguredProvider(config: ServerLlmConfig, provider: string): string | null {
+  if (config.providers[provider]) {
+    return provider;
+  }
+
+  const normalizedProvider = provider.toLowerCase();
+  return Object.keys(config.providers).find((key) => key.toLowerCase() === normalizedProvider) ?? null;
+}
+
+function resolveProviderApiKey(
+  env: Record<string, string | undefined>,
+  provider: string
+): string | null {
+  const keys = ["LLM_API_KEY", ...legacyProviderEnvVars(provider).apiKey];
+  const raw = keys.map((key) => env[key]?.trim()).find((value) => value);
+  return raw ? normalizeEnvValue(raw) : null;
+}
+
+function legacyProviderEnvVars(provider: string): {
+  apiKey: string[];
+  temperature: string[];
+  wordsPerRequest: string[];
+} {
+  switch (provider.toLowerCase()) {
+    case "deepseek":
+      return {
+        apiKey: ["DEEPSEEK_API_KEY"],
+        temperature: ["DEEPSEEK_TEMPERATURE"],
+        wordsPerRequest: ["DEEPSEEK_WORDS_PER_REQUEST"]
+      };
+    case "openai":
+      return {
+        apiKey: ["OPENAI_API_KEY"],
+        temperature: ["OPENAI_TEMPERATURE"],
+        wordsPerRequest: ["OPENAI_WORDS_PER_REQUEST"]
+      };
+    case "volcengine":
+      return {
+        apiKey: ["VOLCENGINE_API_KEY", "ARK_API_KEY"],
+        temperature: ["VOLCENGINE_TEMPERATURE", "ARK_TEMPERATURE"],
+        wordsPerRequest: ["VOLCENGINE_WORDS_PER_REQUEST", "ARK_WORDS_PER_REQUEST"]
+      };
+    default:
+      return {
+        apiKey: [],
+        temperature: [],
+        wordsPerRequest: []
+      };
+  }
 }
 
 function resolveTemperature(

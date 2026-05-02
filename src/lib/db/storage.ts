@@ -50,6 +50,12 @@ export interface StorageAdapter {
     source: string,
     targetDifficulty: number
   ): Promise<{ batch: RecommendationBatchRow; words: WordRecordRow[] }>;
+  appendRecommendationWord(
+    username: string,
+    batchId: string,
+    word: RecommendationWordInput,
+    index: number
+  ): Promise<WordRecordRow>;
   recordWordAction(username: string, wordId: string, action: WordAction): Promise<WordRecordRow>;
   getUserState(username: string): Promise<UserState | null>;
   exportUserBundle(username: string): Promise<UserBundle>;
@@ -435,6 +441,62 @@ export class NodeSqliteStorage implements StorageAdapter {
       db.exec("ROLLBACK");
       throw error;
     }
+  }
+
+  async appendRecommendationWord(
+    username: string,
+    batchId: string,
+    word: RecommendationWordInput,
+    index: number
+  ): Promise<WordRecordRow> {
+    const batch = await this.getOne<RecommendationBatchTableRow>(
+      "SELECT * FROM recommendation_batches WHERE id = ? AND username = ?",
+      [batchId, username]
+    );
+    if (!batch) {
+      throw new Error("Recommendation batch not found");
+    }
+
+    const db = await this.open();
+    const createdAt = offsetIso(batch.created_at, index);
+    const inserted: WordRecordRow = {
+      id: randomUUID(),
+      batchId,
+      username,
+      word: word.word,
+      partOfSpeech: word.partOfSpeech,
+      definitionZh: word.definitionZh,
+      exampleEn: word.exampleEn,
+      exampleZh: word.exampleZh,
+      difficultyReason: word.difficultyReason,
+      difficulty: word.difficulty,
+      status: "new",
+      createdAt,
+      updatedAt: createdAt
+    };
+
+    db.prepare(
+      `INSERT INTO word_records
+       (id, batch_id, username, word, part_of_speech, definition_zh, example_en, example_zh,
+        difficulty_reason, difficulty, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      inserted.id,
+      inserted.batchId,
+      username,
+      inserted.word,
+      inserted.partOfSpeech,
+      inserted.definitionZh,
+      inserted.exampleEn,
+      inserted.exampleZh,
+      inserted.difficultyReason,
+      inserted.difficulty,
+      inserted.status,
+      inserted.createdAt,
+      inserted.updatedAt
+    );
+
+    return inserted;
   }
 
   async recordWordAction(
@@ -980,6 +1042,63 @@ class LibsqlStorage implements StorageAdapter {
     );
 
     return { batch, words: inserted };
+  }
+
+  async appendRecommendationWord(
+    username: string,
+    batchId: string,
+    word: RecommendationWordInput,
+    index: number
+  ): Promise<WordRecordRow> {
+    const batch = await this.getOne<RecommendationBatchTableRow>(
+      "SELECT * FROM recommendation_batches WHERE id = ? AND username = ?",
+      [batchId, username]
+    );
+    if (!batch) {
+      throw new Error("Recommendation batch not found");
+    }
+
+    const client = await this.client();
+    const createdAt = offsetIso(batch.created_at, index);
+    const inserted: WordRecordRow = {
+      id: randomUUID(),
+      batchId,
+      username,
+      word: word.word,
+      partOfSpeech: word.partOfSpeech,
+      definitionZh: word.definitionZh,
+      exampleEn: word.exampleEn,
+      exampleZh: word.exampleZh,
+      difficultyReason: word.difficultyReason,
+      difficulty: word.difficulty,
+      status: "new",
+      createdAt,
+      updatedAt: createdAt
+    };
+
+    await client.execute({
+      sql: `INSERT INTO word_records
+            (id, batch_id, username, word, part_of_speech, definition_zh, example_en, example_zh,
+             difficulty_reason, difficulty, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      args: [
+        inserted.id,
+        inserted.batchId,
+        username,
+        inserted.word,
+        inserted.partOfSpeech,
+        inserted.definitionZh,
+        inserted.exampleEn,
+        inserted.exampleZh,
+        inserted.difficultyReason,
+        inserted.difficulty,
+        inserted.status,
+        inserted.createdAt,
+        inserted.updatedAt
+      ]
+    });
+
+    return inserted;
   }
 
   async recordWordAction(

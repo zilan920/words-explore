@@ -57,13 +57,23 @@ describe("NodeSqliteStorage", () => {
     expect(state?.latestWords).toHaveLength(2);
     expect(state?.latestWords.map((word) => word.word)).toEqual(["coherent", "nuance"]);
 
+    const streamBatch = await storage.createRecommendationBatch(username, [], "mock", 6);
+    const streamedWord = await storage.appendRecommendationWord(
+      username,
+      streamBatch.batch.id,
+      sampleWord("syntax"),
+      0
+    );
+    expect(streamedWord.batchId).toBe(streamBatch.batch.id);
+    expect((await storage.getUserState(username))?.latestWords.map((word) => word.word)).toEqual(["syntax"]);
+
     const bundle = await storage.exportUserBundle(username);
     await writeBundleToSqlite(bundle, exportPath);
     const imported = await readBundleFromSqlite(exportPath);
 
     expect(imported.user.username).toBe(username);
     expect(imported.user.learningGoal).toBe("cet6");
-    expect(imported.wordRecords).toHaveLength(2);
+    expect(imported.wordRecords).toHaveLength(3);
     expect(imported.wordActions).toHaveLength(2);
 
     const secondStorage = new NodeSqliteStorage(join(dir, "import.sqlite"));
@@ -71,11 +81,11 @@ describe("NodeSqliteStorage", () => {
     await secondStorage.importUserBundle(imported);
     const importedState = await secondStorage.getUserState(username);
 
-    expect(importedState?.stats.totalWords).toBe(2);
+    expect(importedState?.stats.totalWords).toBe(3);
 
     await secondStorage.renameUser(username, "custom-user-01");
     expect(await secondStorage.getUserState(username)).toBeNull();
-    expect((await secondStorage.getUserState("custom-user-01"))?.stats.totalWords).toBe(2);
+    expect((await secondStorage.getUserState("custom-user-01"))?.stats.totalWords).toBe(3);
 
     await secondStorage.updateLearningGoal("custom-user-01", "toefl");
     expect((await secondStorage.getUserState("custom-user-01"))?.user.learningGoal).toBe("toefl");

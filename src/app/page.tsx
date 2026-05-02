@@ -29,7 +29,8 @@ import {
   learningGoalOptions,
   type LearningGoal
 } from "@/lib/learningGoals";
-import type { RecommendationWordInput, UserState, WordAction, WordRecordRow } from "@/lib/types";
+import { appConfig } from "@/lib/appConfig";
+import type { UserState, WordAction, WordRecordRow } from "@/lib/types";
 
 type Tab = "study" | "history" | "settings";
 type AppTheme = "focus" | "sketch";
@@ -58,7 +59,7 @@ interface SseEvent {
 }
 
 interface RecommendationStreamPayload {
-  word?: RecommendationWordInput;
+  word?: WordRecordRow;
   words?: WordRecordRow[];
   state?: UserState;
   error?: string;
@@ -73,7 +74,7 @@ const usernameKey = "words-explore.username";
 const accessTokenKey = "words-explore.accessToken";
 const themeKey = "words-explore.theme";
 const unknownAnswer = "我不认识";
-const singleRecommendationCount = 1;
+const streamRecommendationCount = appConfig.wordBatchSize;
 const studyQueueTargetSize = 3;
 const swipeExitMs = 260;
 const recommendationRetryFallbackMs = 10_000;
@@ -410,7 +411,7 @@ export default function Home() {
     }
 
     const replaceCurrent = options?.replaceCurrent === true;
-    const requestedCount = options?.count ?? singleRecommendationCount;
+    const requestedCount = options?.count ?? streamRecommendationCount;
     recommendationRequestRef.current = true;
 
     try {
@@ -454,7 +455,13 @@ export default function Home() {
               continue;
             }
 
-            if (event.event === "thinking" || event.event === "word") {
+            if (event.event === "thinking") {
+              continue;
+            }
+
+            if (event.event === "word" && payload.word) {
+              const word = payload.word;
+              setStudyWords((current) => appendUniqueWords(current, [word]));
               continue;
             }
 
@@ -542,7 +549,7 @@ export default function Home() {
       return;
     }
 
-    void generateRecommendations({ count: singleRecommendationCount });
+    void generateRecommendations({ count: streamRecommendationCount });
   }, [
     assessment,
     busy,
@@ -1089,6 +1096,7 @@ function StudyView({
     [latestWords, queueTargetSize]
   );
   const currentWord = queuedWords[0] ?? null;
+  const nextWord = queuedWords[1] ?? null;
   const exitAction = currentWord && exitingWord?.id === currentWord.id ? exitingWord.action : null;
   const waitingForRetry = recommendationRetryAt !== null && recommendationRetryAt > Date.now();
   const preparingWords = recommendationBusy || waitingForRetry;
@@ -1201,7 +1209,7 @@ function StudyView({
         <button
           className="button-base generate-button mt-6 w-full bg-leaf px-4 text-white shadow-press"
           disabled={preparingWords}
-          onClick={() => onGenerate({ count: singleRecommendationCount })}
+          onClick={() => onGenerate({ count: streamRecommendationCount })}
         >
           {preparingWords ? (
             <Loader2 className="animate-spin" size={20} aria-hidden />
@@ -1215,14 +1223,20 @@ function StudyView({
   }
 
   return (
-    <div className="space-y-4">
-      <div className="grid grid-cols-3 gap-2.5">
-        <Metric label="已学会" value={state.stats.learned} tone="leaf" />
-        <Metric label="太简单" value={state.stats.tooEasy} tone="amber" />
-        <Metric label="继续学" value={state.stats.learning} tone="steel" />
-      </div>
+    <div className="study-card-focus">
       <div className="single-card-stage">
+        {nextWord ? (
+          <StudyWordCard
+            key={`next-${nextWord.id}`}
+            word={nextWord}
+            busy={false}
+            exitAction={null}
+            preview
+            onAct={onAct}
+          />
+        ) : null}
         <StudyWordCard
+          key={currentWord.id}
           word={currentWord}
           busy={busy === currentWord.id}
           exitAction={exitAction}
@@ -1269,7 +1283,7 @@ function ResultPanel({
       <button
         className="button-base generate-button mt-6 w-full bg-leaf px-4 text-white shadow-press"
         disabled={busy}
-        onClick={() => onGenerate({ count: singleRecommendationCount })}
+        onClick={() => onGenerate({ count: streamRecommendationCount })}
       >
         {busy ? <Loader2 className="animate-spin" size={20} aria-hidden /> : <Sparkles size={20} aria-hidden />}
         开始学习
@@ -1317,26 +1331,24 @@ function StudyWordCard({
   word,
   busy,
   exitAction,
+  preview = false,
   onAct
 }: {
   word: WordRecordRow;
   busy: boolean;
   exitAction: WordAction | null;
+  preview?: boolean;
   onAct: (word: WordRecordRow, action: WordAction) => void;
 }) {
   const disabled = busy || Boolean(exitAction);
-  const exitClass =
-    exitAction === "learned"
-      ? "swipe-exit-right"
-      : exitAction === "too_easy"
-        ? "swipe-exit-up"
-        : exitAction === "learning"
-          ? "swipe-exit-left"
-          : "";
+  const exitClass = exitAction ? "swipe-exit-left" : "";
+  const stackClass = preview ? "next-word-card" : "active-word-card";
 
   return (
     <article
-      className={`word-card single-word-card rounded-lg border border-line bg-white p-4 shadow-soft ${exitClass}`}
+      className={`word-card single-word-card ${stackClass} rounded-lg border border-line bg-white p-4 shadow-soft ${exitClass}`}
+      aria-hidden={preview ? true : undefined}
+      inert={preview ? true : undefined}
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
