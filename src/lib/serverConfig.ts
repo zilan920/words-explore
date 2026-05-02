@@ -70,7 +70,7 @@ export const serverConfig: {
         timeoutMs: 15000,
         maxTokens: null,
         temperature: 1.3,
-        wordsPerRequest: 5,
+        wordsPerRequest: 3,
         thinking: "disabled"
       },
       openai: {
@@ -79,7 +79,7 @@ export const serverConfig: {
         timeoutMs: 15000,
         maxTokens: null,
         temperature: 1.3,
-        wordsPerRequest: 5,
+        wordsPerRequest: 3,
         thinking: null
       },
       volcengine: {
@@ -88,7 +88,7 @@ export const serverConfig: {
         timeoutMs: 15000,
         maxTokens: null,
         temperature: 1.3,
-        wordsPerRequest: 5,
+        wordsPerRequest: 3,
         thinking: null
       },
       "openai-compatible": {
@@ -97,7 +97,7 @@ export const serverConfig: {
         timeoutMs: 15000,
         maxTokens: null,
         temperature: 1.3,
-        wordsPerRequest: 5,
+        wordsPerRequest: 3,
         thinking: null
       }
     }

@@ -56,6 +56,11 @@ export interface StorageAdapter {
     word: RecommendationWordInput,
     index: number
   ): Promise<WordRecordRow>;
+  appendRecommendationWordToBatch(
+    batch: RecommendationBatchRow,
+    word: RecommendationWordInput,
+    index: number
+  ): Promise<WordRecordRow>;
   recordWordAction(username: string, wordId: string, action: WordAction): Promise<WordRecordRow>;
   getUserState(username: string): Promise<UserState | null>;
   exportUserBundle(username: string): Promise<UserBundle>;
@@ -457,12 +462,20 @@ export class NodeSqliteStorage implements StorageAdapter {
       throw new Error("Recommendation batch not found");
     }
 
+    return this.appendRecommendationWordToBatch(mapBatch(batch), word, index);
+  }
+
+  async appendRecommendationWordToBatch(
+    batch: RecommendationBatchRow,
+    word: RecommendationWordInput,
+    index: number
+  ): Promise<WordRecordRow> {
     const db = await this.open();
-    const createdAt = offsetIso(batch.created_at, index);
+    const createdAt = offsetIso(batch.createdAt, index);
     const inserted: WordRecordRow = {
       id: randomUUID(),
-      batchId,
-      username,
+      batchId: batch.id,
+      username: batch.username,
       word: word.word,
       partOfSpeech: word.partOfSpeech,
       definitionZh: word.definitionZh,
@@ -483,7 +496,7 @@ export class NodeSqliteStorage implements StorageAdapter {
     ).run(
       inserted.id,
       inserted.batchId,
-      username,
+      inserted.username,
       inserted.word,
       inserted.partOfSpeech,
       inserted.definitionZh,
@@ -1058,12 +1071,20 @@ class LibsqlStorage implements StorageAdapter {
       throw new Error("Recommendation batch not found");
     }
 
+    return this.appendRecommendationWordToBatch(mapBatch(batch), word, index);
+  }
+
+  async appendRecommendationWordToBatch(
+    batch: RecommendationBatchRow,
+    word: RecommendationWordInput,
+    index: number
+  ): Promise<WordRecordRow> {
     const client = await this.client();
-    const createdAt = offsetIso(batch.created_at, index);
+    const createdAt = offsetIso(batch.createdAt, index);
     const inserted: WordRecordRow = {
       id: randomUUID(),
-      batchId,
-      username,
+      batchId: batch.id,
+      username: batch.username,
       word: word.word,
       partOfSpeech: word.partOfSpeech,
       definitionZh: word.definitionZh,
@@ -1084,7 +1105,7 @@ class LibsqlStorage implements StorageAdapter {
       args: [
         inserted.id,
         inserted.batchId,
-        username,
+        inserted.username,
         inserted.word,
         inserted.partOfSpeech,
         inserted.definitionZh,

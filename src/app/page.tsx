@@ -29,7 +29,6 @@ import {
   learningGoalOptions,
   type LearningGoal
 } from "@/lib/learningGoals";
-import { appConfig } from "@/lib/appConfig";
 import type { UserState, WordAction, WordRecordRow } from "@/lib/types";
 
 type Tab = "study" | "history" | "settings";
@@ -74,8 +73,9 @@ const usernameKey = "words-explore.username";
 const accessTokenKey = "words-explore.accessToken";
 const themeKey = "words-explore.theme";
 const unknownAnswer = "我不认识";
-const streamRecommendationCount = appConfig.wordBatchSize;
 const studyQueueTargetSize = 3;
+const initialRecommendationCount = studyQueueTargetSize;
+const refillRecommendationCount = 1;
 const swipeExitMs = 260;
 const recommendationRetryFallbackMs = 10_000;
 
@@ -411,7 +411,7 @@ export default function Home() {
     }
 
     const replaceCurrent = options?.replaceCurrent === true;
-    const requestedCount = options?.count ?? streamRecommendationCount;
+    const requestedCount = options?.count ?? refillRecommendationCount;
     recommendationRequestRef.current = true;
 
     try {
@@ -549,7 +549,11 @@ export default function Home() {
       return;
     }
 
-    void generateRecommendations({ count: streamRecommendationCount });
+    const count =
+      queuedStudyWords.length === 0 && state.stats.totalWords === 0
+        ? initialRecommendationCount
+        : refillRecommendationCount;
+    void generateRecommendations({ count });
   }, [
     assessment,
     busy,
@@ -557,6 +561,7 @@ export default function Home() {
     queuedStudyWords.length,
     recommendationBusy,
     recommendationRetryAt,
+    state?.stats.totalWords,
     state?.user.assessmentCompletedAt,
     tab,
     username
@@ -1209,7 +1214,7 @@ function StudyView({
         <button
           className="button-base generate-button mt-6 w-full bg-leaf px-4 text-white shadow-press"
           disabled={preparingWords}
-          onClick={() => onGenerate({ count: streamRecommendationCount })}
+          onClick={() => onGenerate({ count: initialRecommendationCount })}
         >
           {preparingWords ? (
             <Loader2 className="animate-spin" size={20} aria-hidden />
@@ -1283,7 +1288,7 @@ function ResultPanel({
       <button
         className="button-base generate-button mt-6 w-full bg-leaf px-4 text-white shadow-press"
         disabled={busy}
-        onClick={() => onGenerate({ count: streamRecommendationCount })}
+        onClick={() => onGenerate({ count: initialRecommendationCount })}
       >
         {busy ? <Loader2 className="animate-spin" size={20} aria-hidden /> : <Sparkles size={20} aria-hidden />}
         开始学习

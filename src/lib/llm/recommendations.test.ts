@@ -21,6 +21,16 @@ const baseWord = {
   difficulty: 7
 };
 
+const compactBaseWord = {
+  w: "coherent",
+  p: "adj",
+  z: "连贯的",
+  e: "A coherent answer connects ideas logically.",
+  t: "连贯回答能有逻辑地连接观点。",
+  r: "抽象表达",
+  l: 7
+};
+
 function testWord(index: number): string {
   let cursor = index;
   let suffix = "";
@@ -137,6 +147,44 @@ describe("recommendation validation", () => {
     );
   });
 
+  it("accepts compact provider output fields", () => {
+    const words = [
+      compactBaseWord,
+      { ...compactBaseWord, w: "subtle" },
+      { ...compactBaseWord, w: "compose" }
+    ];
+
+    expect(parseRecommendationWordBatchText(JSON.stringify({ words }), 3)).toEqual([
+      {
+        word: "coherent",
+        partOfSpeech: "adj",
+        definitionZh: "连贯的",
+        exampleEn: "A coherent answer connects ideas logically.",
+        exampleZh: "连贯回答能有逻辑地连接观点。",
+        difficultyReason: "抽象表达",
+        difficulty: 7
+      },
+      {
+        word: "subtle",
+        partOfSpeech: "adj",
+        definitionZh: "连贯的",
+        exampleEn: "A coherent answer connects ideas logically.",
+        exampleZh: "连贯回答能有逻辑地连接观点。",
+        difficultyReason: "抽象表达",
+        difficulty: 7
+      },
+      {
+        word: "compose",
+        partOfSpeech: "adj",
+        definitionZh: "连贯的",
+        exampleEn: "A coherent answer connects ideas logically.",
+        exampleZh: "连贯回答能有逻辑地连接观点。",
+        difficultyReason: "抽象表达",
+        difficulty: 7
+      }
+    ]);
+  });
+
   it("repairs a missing comma before a known recommendation field", () => {
     const words = wordList();
     const malformedFirstWord = JSON.stringify(words[0]).replace(
@@ -251,6 +299,8 @@ describe("recommendation prompt", () => {
     expect(prompt).toContain("推荐 3 个");
     expect(prompt).toContain('{"words": [...]}');
     expect(prompt).toContain("长度为 3 的 JSON array");
+    expect(prompt).toContain("短字段：w, p, z, e, t, r, l");
+    expect(prompt).toContain('"w": "coherent"');
     expect(prompt).toContain("学习目标：雅思");
     expect(prompt).toContain("学会的单词：coherent");
     expect(prompt).toContain("太简单的单词：simple");
@@ -270,10 +320,10 @@ describe("app config", () => {
 });
 
 describe("LLM provider config", () => {
-  it("uses the configured default provider with generic API key", () => {
+  it("uses the configured default provider with app-scoped API key", () => {
     expect(
       resolveLlmConfig({
-        LLM_API_KEY: "generic-key"
+        WORDS_EXPLORE_LLM_API_KEY: "generic-key"
       })
     ).toEqual({
       provider: "deepseek",
@@ -283,7 +333,7 @@ describe("LLM provider config", () => {
       timeoutMs: 15000,
       maxTokens: null,
       temperature: 1.3,
-      wordsPerRequest: 5,
+      wordsPerRequest: 3,
       thinking: "disabled"
     });
   });
@@ -291,7 +341,7 @@ describe("LLM provider config", () => {
   it("keeps provider non-secret settings in TypeScript config", () => {
     expect(
       resolveLlmConfig({
-        LLM_API_KEY: "generic-key"
+        WORDS_EXPLORE_LLM_API_KEY: "generic-key"
       })
     ).toEqual({
       provider: "deepseek",
@@ -304,7 +354,7 @@ describe("LLM provider config", () => {
     expect(
       resolveLlmConfig({
         LLM_PROVIDER: "openai",
-        LLM_API_KEY: "generic-key"
+        WORDS_EXPLORE_LLM_API_KEY: "generic-key"
       })
     ).toEqual({
       provider: "openai",
@@ -317,7 +367,7 @@ describe("LLM provider config", () => {
     expect(
       resolveLlmConfig({
         LLM_PROVIDER: "volcengine",
-        LLM_API_KEY: "generic-key"
+        WORDS_EXPLORE_LLM_API_KEY: "generic-key"
       })
     ).toEqual({
       provider: "volcengine",
@@ -345,7 +395,7 @@ describe("LLM provider config", () => {
 
     expect(
       resolveLlmConfig({
-        LLM_API_KEY: "generic-key"
+        WORDS_EXPLORE_LLM_API_KEY: "generic-key"
       }, config)
     ).toEqual({
       provider: "openai-compatible",
@@ -363,7 +413,7 @@ describe("LLM provider config", () => {
   it("allows generic LLM_TEMPERATURE to override the active provider temperature", () => {
     expect(
       resolveLlmConfig({
-        LLM_API_KEY: "generic-key",
+        WORDS_EXPLORE_LLM_API_KEY: "generic-key",
         LLM_TEMPERATURE: "0.6"
       })?.temperature
     ).toBe(0.6);
@@ -374,7 +424,7 @@ describe("LLM provider config", () => {
     try {
       expect(
         resolveLlmConfig({
-          LLM_API_KEY: "generic-key",
+          WORDS_EXPLORE_LLM_API_KEY: "generic-key",
           LLM_TEMPERATURE: "hot"
         })?.temperature
       ).toBe(serverConfig.llm.providers.deepseek.temperature);
@@ -402,7 +452,7 @@ describe("LLM provider config", () => {
 
     expect(
       resolveLlmConfig({
-        LLM_API_KEY: "generic-key",
+        WORDS_EXPLORE_LLM_API_KEY: "generic-key",
         LLM_WORDS_PER_REQUEST: "6"
       }, config)?.wordsPerRequest
     ).toBe(6);
@@ -425,5 +475,9 @@ describe("LLM provider config", () => {
 
   it("returns null without a usable API key", () => {
     expect(resolveLlmConfig({})).toBeNull();
+  });
+
+  it("ignores unrelated system-level LLM_API_KEY", () => {
+    expect(resolveLlmConfig({ LLM_API_KEY: "system-key" })).toBeNull();
   });
 });

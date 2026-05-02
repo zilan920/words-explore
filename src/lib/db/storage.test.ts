@@ -58,12 +58,7 @@ describe("NodeSqliteStorage", () => {
     expect(state?.latestWords.map((word) => word.word)).toEqual(["coherent", "nuance"]);
 
     const streamBatch = await storage.createRecommendationBatch(username, [], "mock", 6);
-    const streamedWord = await storage.appendRecommendationWord(
-      username,
-      streamBatch.batch.id,
-      sampleWord("syntax"),
-      0
-    );
+    const streamedWord = await storage.appendRecommendationWordToBatch(streamBatch.batch, sampleWord("syntax"), 0);
     expect(streamedWord.batchId).toBe(streamBatch.batch.id);
     expect((await storage.getUserState(username))?.latestWords.map((word) => word.word)).toEqual(["syntax"]);
 

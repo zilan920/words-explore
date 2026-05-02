@@ -174,12 +174,7 @@ export async function POST(request: Request) {
               return;
             }
             const batch = await ensureStreamBatch(event.source);
-            const word = await storage.appendRecommendationWord(
-              username,
-              batch.id,
-              event.word,
-              persistedWords.length
-            );
+            const word = await storage.appendRecommendationWordToBatch(batch, event.word, persistedWords.length);
             persistedWords.push(word);
             send("word", {
               source: event.source,

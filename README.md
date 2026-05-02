@@ -8,18 +8,19 @@ Create `.env.local` with the active provider, API key, and optional runtime over
 
 ```bash
 LLM_PROVIDER=deepseek
-LLM_API_KEY=your_api_key
+WORDS_EXPLORE_LLM_API_KEY=your_api_key
 LLM_TEMPERATURE=0.6
-LLM_WORDS_PER_REQUEST=5
+LLM_WORDS_PER_REQUEST=3
 ```
 
 The app calls `POST /chat/completions` through the OpenAI SDK and asks the provider to return `{ "words": [...] }` for each request, then streams accepted words to the UI through the app API.
 If the key is missing or the API call fails, recommendations fall back to local mock words so the learning flow still works.
+Use `WORDS_EXPLORE_LLM_API_KEY` for a provider-agnostic key; provider-specific keys such as `DEEPSEEK_API_KEY`, `OPENAI_API_KEY`, and `VOLCENGINE_API_KEY` are still supported as fallbacks.
 The server logs provider, model, timeout, token limit, temperature, words per request, and request duration without printing the API key.
 Provider-specific model, base URL, timeout, default temperature, default words per request, thinking mode, batch size, countdown, and storage mode live in TypeScript config.
 `serverConfig.llm.provider` selects the default provider, and `LLM_PROVIDER` can override it at runtime with a key from `serverConfig.llm.providers`, for example `deepseek`, `openai`, or `volcengine`.
 `LLM_TEMPERATURE` overrides the active provider's default. Valid temperature values are `0` to `2`.
-`LLM_WORDS_PER_REQUEST` overrides the active provider's words-per-request default. Prefer factors of the configured batch size, for example `5` for the default 10-word batch.
+`LLM_WORDS_PER_REQUEST` overrides the active provider's words-per-request default. The default is `3` for the initial fill; subsequent UI refills request one word at a time.
 
 You can add another OpenAI-compatible provider by adding an entry under `serverConfig.llm.providers`, then select it with `serverConfig.llm.provider` or `LLM_PROVIDER`.
 
