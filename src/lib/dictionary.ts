@@ -4,7 +4,8 @@ import { serverConfig } from "@/lib/serverConfig";
 export interface DictionaryWordInfo {
   word: string;
   partOfSpeech: string;
-  definition: string;
+  definitionEn: string;
+  definitionZh: string;
   example: string;
 }
 
@@ -84,9 +85,29 @@ export async function lookupDictionaryWord(
   return {
     word: payload[0]?.word?.trim() || normalizedWord,
     partOfSpeech: selected.partOfSpeech,
-    definition: truncateDictionaryText(selected.definition, 160),
+    definitionEn: truncateDictionaryText(selected.definition, 160),
+    definitionZh: await lookupChineseDefinition(normalizedWord, selected.definition),
     example: truncateDictionaryText(selected.example ?? `Dictionary definition: ${selected.definition}`, 320)
   };
+}
+
+async function lookupChineseDefinition(word: string, fallbackDefinition: string): Promise<string> {
+  try {
+    const { searchWord } = await import("ecdict");
+    const result = await Promise.resolve(searchWord(word, { caseInsensitive: true }));
+    const translation = typeof result?.translation === "string" ? cleanDictionaryText(result.translation) : "";
+
+    if (translation) {
+      return truncateDictionaryText(translation, 160);
+    }
+  } catch (error) {
+    console.warn("[dictionary] ECDICT lookup failed; falling back to English definition", {
+      word,
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
+
+  return truncateDictionaryText(`英文释义：${fallbackDefinition}`, 160);
 }
 
 function normalizeDictionaryWord(word: string): string {

@@ -420,9 +420,9 @@ async function hydrateRecommendationCandidate(
   return recommendationWordSchema.parse({
     word: candidate.word,
     partOfSpeech: dictionary.partOfSpeech,
-    definitionZh: dictionary.definition,
+    definitionZh: dictionary.definitionZh,
     exampleEn: dictionary.example,
-    exampleZh: `词典释义：${dictionary.definition}`,
+    exampleZh: `词典释义：${dictionary.definitionZh}`,
     difficultyReason: candidate.difficultyReason,
     difficulty: candidate.difficulty
   });

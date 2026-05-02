@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { performance } from "node:perf_hooks";
 
 const env = { ...loadDotEnv(".env.local"), ...process.env };
-const apiKey = (env.DEEPSEEK_API_KEY || env.WORDS_EXPLORE_LLM_API_KEY || "").trim();
+const apiKey = (env.WORDS_EXPLORE_LLM_API_KEY || env.DEEPSEEK_API_KEY || "").trim();
 const configuredBaseUrl = (env.DEEPSEEK_BASE_URL || env.LLM_BASE_URL || "https://api.deepseek.com").replace(
   /\/$/,
   ""
@@ -17,7 +17,7 @@ const promptMode = process.env.PROMPT_MODE || "tiny";
 const thinking = parseThinkingMode(env.DEEPSEEK_THINKING || env.LLM_THINKING, "disabled");
 
 if (!apiKey) {
-  console.error("Missing DEEPSEEK_API_KEY or WORDS_EXPLORE_LLM_API_KEY in .env.local");
+  console.error("Missing WORDS_EXPLORE_LLM_API_KEY or DEEPSEEK_API_KEY in .env.local");
   process.exit(1);
 }
 

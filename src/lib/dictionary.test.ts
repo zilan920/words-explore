@@ -28,7 +28,8 @@ describe("dictionary lookup", () => {
     await expect(lookupDictionaryWord("Coherent", { fetchImpl, timeoutMs: 1000 })).resolves.toEqual({
       word: "coherent",
       partOfSpeech: "adjective",
-      definition: "logical and consistent.",
+      definitionEn: "logical and consistent.",
+      definitionZh: expect.stringContaining("连贯"),
       example: "They failed to develop a coherent economic strategy."
     });
     expect(fetchImpl).toHaveBeenCalledWith(
