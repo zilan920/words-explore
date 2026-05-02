@@ -529,6 +529,8 @@ input:focus-visible {
 }
 
 .mobile-shell[data-theme="sketch"] .word-card.preview-word-card {
+  position: absolute;
+  inset: 0;
   animation: none;
   box-shadow: 5px 6px 0 var(--sketch-ink), 0 12px 24px rgba(23, 20, 39, 0.12);
   transform:
