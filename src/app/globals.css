@@ -134,27 +134,128 @@ input:focus-visible {
   width: 100%;
   transform-origin: center bottom;
   animation: card-enter 220ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  user-select: none;
   will-change: transform, opacity;
 }
 
 .active-word-card {
   position: relative;
+  z-index: 3;
+  cursor: grab;
+  touch-action: none;
+  transform: translate3d(var(--swipe-x, 0), var(--swipe-y, 0), 0) rotate(var(--swipe-rotate, 0deg));
+  transition:
+    transform 180ms ease,
+    box-shadow 180ms ease;
+}
+
+.active-word-card.is-dragging {
+  cursor: grabbing;
+  transition: none;
+  box-shadow: 0 24px 52px rgba(21, 21, 40, 0.18);
+}
+
+.preview-word-card {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  transform:
+    translateY(var(--stack-y))
+    scale(var(--stack-scale))
+    rotate(var(--stack-rotate));
+  animation: none;
+  filter: saturate(0.94);
+  opacity: var(--stack-opacity);
+  transition:
+    opacity 260ms ease,
+    transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.preview-word-card-1 {
+  --stack-y: 14px;
+  --stack-scale: 0.965;
+  --stack-rotate: -1.2deg;
+  --stack-opacity: 0.76;
   z-index: 2;
 }
 
-.next-word-card {
-  position: absolute;
-  inset: 0;
+.preview-word-card-2 {
+  --stack-y: 28px;
+  --stack-scale: 0.93;
+  --stack-rotate: 1.1deg;
+  --stack-opacity: 0.42;
   z-index: 1;
-  pointer-events: none;
-  opacity: 0.72;
-  transform: translateY(14px) scale(0.965);
-  animation: none;
-  filter: saturate(0.94);
+}
+
+.single-card-stage.is-swiping .preview-word-card-1 {
+  --stack-y: 0px;
+  --stack-scale: 1;
+  --stack-rotate: 0deg;
+  --stack-opacity: 1;
+}
+
+.single-card-stage.is-swiping .preview-word-card-2 {
+  --stack-y: 14px;
+  --stack-scale: 0.965;
+  --stack-rotate: -1.2deg;
+  --stack-opacity: 0.76;
 }
 
 .swipe-exit-left {
-  animation: swipe-exit-left 260ms ease-in forwards;
+  animation: swipe-exit-left 320ms cubic-bezier(0.58, 0, 0.7, 0.28) forwards;
+}
+
+.swipe-exit-right {
+  animation: swipe-exit-right 320ms cubic-bezier(0.58, 0, 0.7, 0.28) forwards;
+}
+
+.swipe-exit-up {
+  animation: swipe-exit-up 320ms cubic-bezier(0.58, 0, 0.7, 0.28) forwards;
+}
+
+.swipe-stamps {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+}
+
+.swipe-stamp {
+  position: absolute;
+  border: 3px solid currentColor;
+  border-radius: 8px;
+  padding: 5px 10px;
+  background: rgba(255, 255, 255, 0.82);
+  font-size: 0.95rem;
+  font-weight: 900;
+  line-height: 1;
+  opacity: 0;
+  text-transform: uppercase;
+  transition: opacity 80ms linear;
+}
+
+.swipe-stamp-left {
+  top: 22px;
+  left: 18px;
+  color: #ef4444;
+  opacity: var(--swipe-left, 0);
+  transform: rotate(-13deg) scale(1);
+}
+
+.swipe-stamp-right {
+  top: 22px;
+  right: 18px;
+  color: #16a085;
+  opacity: var(--swipe-right, 0);
+  transform: rotate(13deg) scale(1);
+}
+
+.swipe-stamp-up {
+  left: 50%;
+  top: 46%;
+  color: #4f46e5;
+  opacity: var(--swipe-up, 0);
+  transform: translate(-50%, -50%) rotate(-4deg) scale(1);
 }
 
 .mobile-shell[data-theme="sketch"] {
@@ -379,27 +480,137 @@ input:focus-visible {
 }
 
 .mobile-shell[data-theme="sketch"] .word-card {
+  position: relative;
+  overflow: hidden;
+  border: 2px solid var(--sketch-ink);
   animation: sketch-card-in 260ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
   background:
+    radial-gradient(circle at 12% 18%, rgba(255, 90, 165, 0.14) 0 18px, transparent 19px),
+    radial-gradient(circle at 88% 14%, rgba(38, 198, 180, 0.16) 0 16px, transparent 17px),
     linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(255, 250, 240, 0.95)),
     var(--sketch-paper);
+  box-shadow: 7px 8px 0 var(--sketch-ink), 0 18px 38px rgba(23, 20, 39, 0.16);
 }
 
-.mobile-shell[data-theme="sketch"] .word-card.next-word-card {
+.mobile-shell[data-theme="sketch"] .word-card > * {
+  position: relative;
+  z-index: 1;
+}
+
+.mobile-shell[data-theme="sketch"] .word-card::before {
+  content: "";
+  position: absolute;
+  inset: 7px;
+  z-index: 0;
+  border: 2px solid rgba(23, 20, 39, 0.30);
+  border-radius: 12px 8px 13px 9px;
+  pointer-events: none;
+  transform: rotate(-0.45deg);
+}
+
+.mobile-shell[data-theme="sketch"] .word-card::after {
+  content: "";
+  position: absolute;
+  right: 18px;
+  bottom: 18px;
+  width: 74px;
+  height: 14px;
+  z-index: 0;
+  border: 2px solid rgba(23, 20, 39, 0.18);
+  border-radius: 999px;
+  background:
+    repeating-linear-gradient(
+      -12deg,
+      rgba(255, 217, 90, 0.72) 0 8px,
+      rgba(255, 255, 255, 0.45) 8px 14px
+    );
+  pointer-events: none;
+  transform: rotate(-5deg);
+}
+
+.mobile-shell[data-theme="sketch"] .word-card.preview-word-card {
   animation: none;
-  transform: translateY(14px) scale(0.965) rotate(-1deg);
+  box-shadow: 5px 6px 0 var(--sketch-ink), 0 12px 24px rgba(23, 20, 39, 0.12);
+  transform:
+    translateY(var(--stack-y))
+    scale(var(--stack-scale))
+    rotate(var(--stack-rotate));
+}
+
+.mobile-shell[data-theme="sketch"] .word-card.preview-word-card-1 {
+  --stack-y: 17px;
+  --stack-scale: 0.962;
+  --stack-rotate: -2.4deg;
+  background:
+    radial-gradient(circle at 16% 20%, rgba(255, 255, 255, 0.35) 0 16px, transparent 17px),
+    linear-gradient(180deg, rgba(255, 241, 189, 0.96), rgba(255, 250, 240, 0.96));
+}
+
+.mobile-shell[data-theme="sketch"] .word-card.preview-word-card-2 {
+  --stack-y: 33px;
+  --stack-scale: 0.925;
+  --stack-rotate: 2.2deg;
+  background:
+    radial-gradient(circle at 82% 18%, rgba(255, 255, 255, 0.35) 0 14px, transparent 15px),
+    linear-gradient(180deg, rgba(217, 214, 255, 0.96), rgba(255, 250, 240, 0.94));
+}
+
+.mobile-shell[data-theme="sketch"] .single-card-stage.is-swiping .word-card.preview-word-card-1 {
+  --stack-y: 0px;
+  --stack-scale: 1;
+  --stack-rotate: -0.4deg;
+  box-shadow: 7px 8px 0 var(--sketch-ink), 0 18px 38px rgba(23, 20, 39, 0.16);
+}
+
+.mobile-shell[data-theme="sketch"] .single-card-stage.is-swiping .word-card.preview-word-card-2 {
+  --stack-y: 17px;
+  --stack-scale: 0.962;
+  --stack-rotate: -2.4deg;
 }
 
 .mobile-shell[data-theme="sketch"] .word-card.swipe-exit-left {
-  animation: swipe-exit-left 260ms ease-in forwards;
+  animation: swipe-exit-left 320ms cubic-bezier(0.58, 0, 0.7, 0.28) forwards;
 }
 
-.mobile-shell[data-theme="sketch"] .word-card:nth-child(2n) {
+.mobile-shell[data-theme="sketch"] .word-card.swipe-exit-right {
+  animation: swipe-exit-right 320ms cubic-bezier(0.58, 0, 0.7, 0.28) forwards;
+}
+
+.mobile-shell[data-theme="sketch"] .word-card.swipe-exit-up {
+  animation: swipe-exit-up 320ms cubic-bezier(0.58, 0, 0.7, 0.28) forwards;
+}
+
+.mobile-shell[data-theme="sketch"] .word-card:nth-child(2n):not(.preview-word-card):not(.active-word-card) {
   transform: rotate(0.35deg);
 }
 
 .mobile-shell[data-theme="sketch"] .word-card.active-word-card {
-  transform: none;
+  transform: translate3d(var(--swipe-x, 0), var(--swipe-y, 0), 0) rotate(var(--swipe-rotate, 0deg));
+}
+
+.mobile-shell[data-theme="sketch"] .word-card.active-word-card.is-dragging {
+  box-shadow: 10px 12px 0 var(--sketch-ink), 0 26px 48px rgba(23, 20, 39, 0.20);
+}
+
+.mobile-shell[data-theme="sketch"] .swipe-stamp {
+  border-width: 2px;
+  background: #fffaf0;
+  box-shadow: 2px 2px 0 var(--sketch-ink);
+}
+
+.mobile-shell[data-theme="sketch"] .swipe-stamp-left {
+  color: #d92d20;
+  background: #ffe5e5;
+}
+
+.mobile-shell[data-theme="sketch"] .swipe-stamp-right {
+  color: #087663;
+  background: var(--sketch-mint);
+}
+
+.mobile-shell[data-theme="sketch"] .swipe-stamp-up {
+  color: var(--sketch-purple);
+  background: #e4e1ff;
 }
 
 .mobile-shell[data-theme="sketch"] .definition-chip {
@@ -488,7 +699,21 @@ input:focus-visible {
 @keyframes swipe-exit-left {
   to {
     opacity: 0;
-    transform: translateX(-120%) rotate(-12deg) scale(0.96);
+    transform: translate3d(-128%, -4%, 0) rotate(-18deg) scale(0.94);
+  }
+}
+
+@keyframes swipe-exit-right {
+  to {
+    opacity: 0;
+    transform: translate3d(128%, -4%, 0) rotate(18deg) scale(0.94);
+  }
+}
+
+@keyframes swipe-exit-up {
+  to {
+    opacity: 0;
+    transform: translate3d(0, -128%, 0) rotate(-7deg) scale(0.94);
   }
 }
 

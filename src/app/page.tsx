@@ -1,6 +1,6 @@
 "use client";
 
-import type { ChangeEvent, ReactNode } from "react";
+import type { CSSProperties, ChangeEvent, PointerEvent, ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowRight,
@@ -33,6 +33,7 @@ import type { UserState, WordAction, WordRecordRow } from "@/lib/types";
 
 type Tab = "study" | "history" | "settings";
 type AppTheme = "focus" | "sketch";
+type SwipeDirection = "left" | "right" | "up";
 
 interface AssessmentQuestionView {
   id: string;
@@ -76,7 +77,9 @@ const unknownAnswer = "我不认识";
 const studyQueueTargetSize = 3;
 const initialRecommendationCount = studyQueueTargetSize;
 const refillRecommendationCount = 1;
-const swipeExitMs = 260;
+const swipeExitMs = 320;
+const swipeHorizontalThreshold = 88;
+const swipeUpThreshold = 72;
 const recommendationRetryFallbackMs = 10_000;
 
 const themeOptions: Array<{
@@ -95,6 +98,65 @@ const themeOptions: Array<{
     description: "彩色贴纸、涂鸦边框与动感按钮"
   }
 ];
+
+interface SwipeDragState {
+  pointerId: number;
+  startX: number;
+  startY: number;
+  x: number;
+  y: number;
+}
+
+function getSwipeDirectionForAction(action: WordAction): SwipeDirection {
+  if (action === "learned") {
+    return "right";
+  }
+
+  if (action === "learning") {
+    return "up";
+  }
+
+  return "left";
+}
+
+function getSwipeActionFromOffset(x: number, y: number): WordAction | null {
+  if (y < -swipeUpThreshold && Math.abs(y) > Math.abs(x) * 0.72) {
+    return "learning";
+  }
+
+  if (x > swipeHorizontalThreshold) {
+    return "learned";
+  }
+
+  if (x < -swipeHorizontalThreshold) {
+    return "too_easy";
+  }
+
+  return null;
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function getSwipeCardStyle(drag: SwipeDragState | null): CSSProperties | undefined {
+  if (!drag) {
+    return undefined;
+  }
+
+  const leftProgress = drag.x < 0 ? clampNumber(Math.abs(drag.x) / 120, 0, 1) : 0;
+  const rightProgress = drag.x > 0 ? clampNumber(drag.x / 120, 0, 1) : 0;
+  const upProgress = drag.y < 0 ? clampNumber(Math.abs(drag.y) / 110, 0, 1) : 0;
+
+  return {
+    "--swipe-x": `${drag.x}px`,
+    "--swipe-y": `${drag.y}px`,
+    "--swipe-rotate": `${clampNumber(drag.x / 14, -16, 16)}deg`,
+    "--swipe-left": leftProgress,
+    "--swipe-right": rightProgress,
+    "--swipe-up": upProgress
+  } as CSSProperties;
+}
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
@@ -1101,7 +1163,7 @@ function StudyView({
     [latestWords, queueTargetSize]
   );
   const currentWord = queuedWords[0] ?? null;
-  const nextWord = queuedWords[1] ?? null;
+  const backgroundWords = queuedWords.slice(1, 3).reverse();
   const exitAction = currentWord && exitingWord?.id === currentWord.id ? exitingWord.action : null;
   const waitingForRetry = recommendationRetryAt !== null && recommendationRetryAt > Date.now();
   const preparingWords = recommendationBusy || waitingForRetry;
@@ -1229,26 +1291,188 @@ function StudyView({
 
   return (
     <div className="study-card-focus">
-      <div className="single-card-stage">
-        {nextWord ? (
-          <StudyWordCard
-            key={`next-${nextWord.id}`}
-            word={nextWord}
-            busy={false}
-            exitAction={null}
-            preview
-            onAct={onAct}
-          />
-        ) : null}
+      <div className={`single-card-stage${exitAction ? " is-swiping" : ""}`}>
+        {backgroundWords.map((word) => {
+          const stackIndex = queuedWords.findIndex((queuedWord) => queuedWord.id === word.id);
+          return (
+            <StudyWordCard
+              key={`preview-${word.id}`}
+              word={word}
+              busy={false}
+              exitAction={null}
+              preview
+              stackIndex={stackIndex}
+              onAct={onAct}
+            />
+          );
+        })}
         <StudyWordCard
           key={currentWord.id}
           word={currentWord}
           busy={busy === currentWord.id}
           exitAction={exitAction}
+          stackIndex={0}
           onAct={onAct}
         />
       </div>
     </div>
+  );
+}
+
+function StudyWordCard({
+  word,
+  busy,
+  exitAction,
+  preview = false,
+  stackIndex = 0,
+  onAct
+}: {
+  word: WordRecordRow;
+  busy: boolean;
+  exitAction: WordAction | null;
+  preview?: boolean;
+  stackIndex?: number;
+  onAct: (word: WordRecordRow, action: WordAction) => void;
+}) {
+  const [drag, setDrag] = useState<SwipeDragState | null>(null);
+  const disabled = busy || Boolean(exitAction);
+  const exitDirection = exitAction ? getSwipeDirectionForAction(exitAction) : null;
+  const exitClass = exitDirection ? `swipe-exit-${exitDirection}` : "";
+  const stackClass = preview
+    ? `preview-word-card preview-word-card-${Math.min(Math.max(stackIndex, 1), 2)}`
+    : "active-word-card";
+  const dragStyle = !preview ? getSwipeCardStyle(drag) : undefined;
+
+  useEffect(() => {
+    if (!exitAction) {
+      setDrag(null);
+    }
+  }, [exitAction]);
+
+  function handlePointerDown(event: PointerEvent<HTMLElement>) {
+    if (preview || disabled || event.button !== 0) {
+      return;
+    }
+
+    if ((event.target as HTMLElement).closest("button")) {
+      return;
+    }
+
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setDrag({
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      x: 0,
+      y: 0
+    });
+  }
+
+  function handlePointerMove(event: PointerEvent<HTMLElement>) {
+    setDrag((current) => {
+      if (!current || current.pointerId !== event.pointerId) {
+        return current;
+      }
+
+      return {
+        ...current,
+        x: event.clientX - current.startX,
+        y: event.clientY - current.startY
+      };
+    });
+  }
+
+  function finishPointerDrag(event: PointerEvent<HTMLElement>) {
+    if (!drag || drag.pointerId !== event.pointerId) {
+      return;
+    }
+
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+
+    const action = getSwipeActionFromOffset(drag.x, drag.y);
+
+    if (action) {
+      onAct(word, action);
+      return;
+    }
+
+    setDrag(null);
+  }
+
+  function cancelPointerDrag(event: PointerEvent<HTMLElement>) {
+    if (drag && event.currentTarget.hasPointerCapture(drag.pointerId)) {
+      event.currentTarget.releasePointerCapture(drag.pointerId);
+    }
+
+    setDrag(null);
+  }
+
+  return (
+    <article
+      className={`word-card single-word-card ${stackClass} ${
+        drag ? "is-dragging" : ""
+      } rounded-lg border border-line bg-white p-4 shadow-soft ${exitClass}`}
+      style={dragStyle}
+      aria-hidden={preview ? true : undefined}
+      aria-label={preview ? undefined : `${word.word} 单词卡片`}
+      inert={preview ? true : undefined}
+      onPointerCancel={cancelPointerDrag}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={finishPointerDrag}
+    >
+      {!preview ? (
+        <div className="swipe-stamps" aria-hidden>
+          <span className="swipe-stamp swipe-stamp-left">简单</span>
+          <span className="swipe-stamp swipe-stamp-right">会了</span>
+          <span className="swipe-stamp swipe-stamp-up">继续</span>
+        </div>
+      ) : null}
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h3 className="break-words text-4xl font-black leading-tight text-ink">{word.word}</h3>
+          <p className="mt-1 text-sm font-bold text-steel">
+            {word.partOfSpeech} · 难度 {word.difficulty}
+          </p>
+        </div>
+        <StatusBadge status={word.status} />
+      </div>
+      <p className="definition-chip mt-5 rounded-lg border border-leaf/20 bg-leaf/10 px-3 py-2 text-lg font-black leading-7 text-leaf">
+        {word.definitionZh}
+      </p>
+      <p className="example-chip mt-3 rounded-lg bg-mist px-3 py-3 text-sm font-semibold leading-6 text-ink">
+        {word.exampleEn}
+      </p>
+      <p className="mt-2 px-1 text-sm font-semibold leading-6 text-steel">{word.exampleZh}</p>
+      <p className="reason-note mt-3 border-l-4 border-amber/60 bg-amber/10 px-3 py-2 text-sm font-semibold leading-6 text-steel">
+        {word.difficultyReason}
+      </p>
+      <div className="mt-5 grid grid-cols-3 gap-2">
+        <ActionButton
+          label="会了"
+          icon={<CheckCircle2 size={18} aria-hidden />}
+          disabled={disabled}
+          active={false}
+          onClick={() => onAct(word, "learned")}
+        />
+        <ActionButton
+          label="简单"
+          icon={<TrendingUp size={18} aria-hidden />}
+          disabled={disabled}
+          active={false}
+          onClick={() => onAct(word, "too_easy")}
+        />
+        <ActionButton
+          label="继续"
+          icon={<RotateCcw size={18} aria-hidden />}
+          disabled={disabled}
+          active={false}
+          onClick={() => onAct(word, "learning")}
+        />
+      </div>
+    </article>
   );
 }
 
@@ -1329,75 +1553,6 @@ function GenerationStatus({
           : "正在准备下一个单词"}
       </span>
     </div>
-  );
-}
-
-function StudyWordCard({
-  word,
-  busy,
-  exitAction,
-  preview = false,
-  onAct
-}: {
-  word: WordRecordRow;
-  busy: boolean;
-  exitAction: WordAction | null;
-  preview?: boolean;
-  onAct: (word: WordRecordRow, action: WordAction) => void;
-}) {
-  const disabled = busy || Boolean(exitAction);
-  const exitClass = exitAction ? "swipe-exit-left" : "";
-  const stackClass = preview ? "next-word-card" : "active-word-card";
-
-  return (
-    <article
-      className={`word-card single-word-card ${stackClass} rounded-lg border border-line bg-white p-4 shadow-soft ${exitClass}`}
-      aria-hidden={preview ? true : undefined}
-      inert={preview ? true : undefined}
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h3 className="break-words text-4xl font-black leading-tight text-ink">{word.word}</h3>
-          <p className="mt-1 text-sm font-bold text-steel">
-            {word.partOfSpeech} · 难度 {word.difficulty}
-          </p>
-        </div>
-        <StatusBadge status={word.status} />
-      </div>
-      <p className="definition-chip mt-5 rounded-lg border border-leaf/20 bg-leaf/10 px-3 py-2 text-lg font-black leading-7 text-leaf">
-        {word.definitionZh}
-      </p>
-      <p className="example-chip mt-3 rounded-lg bg-mist px-3 py-3 text-sm font-semibold leading-6 text-ink">
-        {word.exampleEn}
-      </p>
-      <p className="mt-2 px-1 text-sm font-semibold leading-6 text-steel">{word.exampleZh}</p>
-      <p className="reason-note mt-3 border-l-4 border-amber/60 bg-amber/10 px-3 py-2 text-sm font-semibold leading-6 text-steel">
-        {word.difficultyReason}
-      </p>
-      <div className="mt-5 grid grid-cols-3 gap-2">
-        <ActionButton
-          label="会了"
-          icon={<CheckCircle2 size={18} aria-hidden />}
-          disabled={disabled}
-          active={false}
-          onClick={() => onAct(word, "learned")}
-        />
-        <ActionButton
-          label="简单"
-          icon={<TrendingUp size={18} aria-hidden />}
-          disabled={disabled}
-          active={false}
-          onClick={() => onAct(word, "too_easy")}
-        />
-        <ActionButton
-          label="继续"
-          icon={<RotateCcw size={18} aria-hidden />}
-          disabled={disabled}
-          active={false}
-          onClick={() => onAct(word, "learning")}
-        />
-      </div>
-    </article>
   );
 }
 
