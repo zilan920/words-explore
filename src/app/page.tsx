@@ -6,10 +6,7 @@ import {
   ArrowRight,
   BookOpenCheck,
   Brain,
-  ChevronDown,
-  ChevronUp,
   CheckCircle2,
-  CircleStop,
   Database,
   Download,
   Gauge,
@@ -27,7 +24,6 @@ import {
   Upload,
   UserRound
 } from "lucide-react";
-import { appConfig } from "@/lib/appConfig";
 import {
   getLearningGoalShortLabel,
   learningGoalOptions,
@@ -70,13 +66,17 @@ interface RecommendationStreamPayload {
 
 interface GenerateRecommendationsOptions {
   replaceCurrent?: boolean;
+  count?: number;
 }
 
 const usernameKey = "words-explore.username";
 const accessTokenKey = "words-explore.accessToken";
 const themeKey = "words-explore.theme";
 const unknownAnswer = "我不认识";
-const { wordBatchSize, autoNextSeconds } = appConfig;
+const singleRecommendationCount = 1;
+const studyQueueTargetSize = 3;
+const swipeExitMs = 260;
+const recommendationRetryFallbackMs = 10_000;
 
 const themeOptions: Array<{
   id: AppTheme;
@@ -196,22 +196,18 @@ function parseRecommendationStreamPayload(event: SseEvent): RecommendationStream
   return JSON.parse(event.data) as RecommendationStreamPayload;
 }
 
-function toStreamingWordRecord(
-  username: string,
-  word: RecommendationWordInput,
-  index: number
-): WordRecordRow {
-  const now = new Date().toISOString();
+function getRecommendationRetryDelayMs(message: string): number | null {
+  const match = message.match(/(\d+)\s*秒后/);
+  if (!match) {
+    return null;
+  }
 
-  return {
-    ...word,
-    id: `stream-${index}-${word.word.toLowerCase().replace(/\s+/g, "-")}`,
-    batchId: "streaming",
-    username,
-    status: "new",
-    createdAt: now,
-    updatedAt: now
-  };
+  const seconds = Number(match[1]);
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    return recommendationRetryFallbackMs;
+  }
+
+  return seconds * 1000;
 }
 
 function appendUniqueWords(current: WordRecordRow[], next: WordRecordRow[]): WordRecordRow[] {
@@ -222,6 +218,12 @@ function appendUniqueWords(current: WordRecordRow[], next: WordRecordRow[]): Wor
 function applyWordUpdates(current: WordRecordRow[], nextState: UserState): WordRecordRow[] {
   const updates = new Map(nextState.history.map((word) => [word.id, word]));
   return current.map((word) => updates.get(word.id) ?? word);
+}
+
+function getStudyWordsFromState(nextState: UserState): WordRecordRow[] {
+  return nextState.history
+    .filter((word) => word.status === "new")
+    .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
 }
 
 export default function Home() {
@@ -237,18 +239,22 @@ export default function Home() {
   const [busy, setBusy] = useState<string | null>("boot");
   const [error, setError] = useState<string | null>(null);
   const [studyWords, setStudyWords] = useState<WordRecordRow[]>([]);
-  const [streamWords, setStreamWords] = useState<WordRecordRow[]>([]);
-  const [llmThinking, setLlmThinking] = useState(false);
-  const [autoNextPending, setAutoNextPending] = useState(false);
-  const [autoNextWordIds, setAutoNextWordIds] = useState<string[]>([]);
-  const [autoNextArmed, setAutoNextArmed] = useState(false);
-  const [autoNextRemaining, setAutoNextRemaining] = useState(autoNextSeconds);
+  const [recommendationBusy, setRecommendationBusy] = useState(false);
+  const [recommendationRetryAt, setRecommendationRetryAt] = useState<number | null>(null);
+  const [discardingWord, setDiscardingWord] = useState<{
+    id: string;
+    action: WordAction;
+  } | null>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
   const recommendationRequestRef = useRef(false);
 
   const currentQuestion = assessment?.questions[questionIndex] ?? null;
   const answeredCount = useMemo(() => Object.keys(answers).length, [answers]);
   const displayedStudyWords = studyWords;
+  const queuedStudyWords = useMemo(
+    () => studyWords.filter((word) => word.status === "new").slice(0, studyQueueTargetSize),
+    [studyWords]
+  );
 
   useEffect(() => {
     setTheme(readStoredTheme());
@@ -258,17 +264,14 @@ export default function Home() {
     try {
       setBusy("state");
       setError(null);
-      setStreamWords([]);
-      setLlmThinking(false);
-      setAutoNextPending(false);
-      setAutoNextWordIds([]);
-      setAutoNextArmed(false);
+      setRecommendationRetryAt(null);
+      setDiscardingWord(null);
       const payload = await api<{ state: UserState }>("/api/users/state", {
         method: "POST",
         body: JSON.stringify({ username: nextUsername })
       });
       setState(payload.state);
-      setStudyWords(payload.state.latestWords);
+      setStudyWords(getStudyWordsFromState(payload.state));
     } catch (loadError) {
       clearStoredSession();
       setUsername(null);
@@ -298,11 +301,9 @@ export default function Home() {
       setBusy("create");
       setError(null);
       setStudyWords([]);
-      setStreamWords([]);
-      setLlmThinking(false);
-      setAutoNextPending(false);
-      setAutoNextWordIds([]);
-      setAutoNextArmed(false);
+      setRecommendationBusy(false);
+      setRecommendationRetryAt(null);
+      setDiscardingWord(null);
       const payload = await api<{ username: string; accessToken: string; state: UserState }>("/api/users/random", {
         method: "POST",
         body: JSON.stringify({ learningGoal: selectedLearningGoal })
@@ -318,7 +319,7 @@ export default function Home() {
       storeSession(payload.username, payload.accessToken);
       setUsername(payload.username);
       setState(payload.state);
-      setStudyWords(payload.state.latestWords);
+      setStudyWords(getStudyWordsFromState(payload.state));
       setResult(null);
       setAnswers({});
       setQuestionIndex(0);
@@ -338,11 +339,9 @@ export default function Home() {
     try {
       setBusy("assessment");
       setError(null);
-      setStreamWords([]);
-      setLlmThinking(false);
-      setAutoNextPending(false);
-      setAutoNextWordIds([]);
-      setAutoNextArmed(false);
+      setRecommendationBusy(false);
+      setRecommendationRetryAt(null);
+      setDiscardingWord(null);
       const payload = await api<AssessmentView>("/api/assessment/start", {
         method: "POST",
         body: JSON.stringify({ username })
@@ -367,11 +366,9 @@ export default function Home() {
       setBusy("submit");
       setError(null);
       setStudyWords([]);
-      setStreamWords([]);
-      setLlmThinking(false);
-      setAutoNextPending(false);
-      setAutoNextWordIds([]);
-      setAutoNextArmed(false);
+      setRecommendationBusy(false);
+      setRecommendationRetryAt(null);
+      setDiscardingWord(null);
       const payload = await api<{
         score: number;
         estimatedLevel: string;
@@ -394,7 +391,7 @@ export default function Home() {
         targetDifficulty: payload.targetDifficulty
       });
       setState(payload.state);
-      setStudyWords(payload.state.latestWords);
+      setStudyWords(getStudyWordsFromState(payload.state));
       setAssessment(null);
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "提交失败");
@@ -413,16 +410,13 @@ export default function Home() {
     }
 
     const replaceCurrent = options?.replaceCurrent === true;
+    const requestedCount = options?.count ?? singleRecommendationCount;
     recommendationRequestRef.current = true;
 
     try {
-      setBusy("recommend");
+      setRecommendationBusy(true);
+      setRecommendationRetryAt(null);
       setError(null);
-      setStreamWords([]);
-      setLlmThinking(false);
-      setAutoNextPending(false);
-      setAutoNextWordIds([]);
-      setAutoNextArmed(false);
       if (replaceCurrent) {
         setStudyWords([]);
       }
@@ -433,7 +427,7 @@ export default function Home() {
           "Content-Type": "application/json",
           ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {})
         },
-        body: JSON.stringify({ username })
+        body: JSON.stringify({ username, count: requestedCount })
       });
 
       if (!response.ok || !response.body) {
@@ -456,23 +450,11 @@ export default function Home() {
           for (const event of parsed.events) {
             const payload = parseRecommendationStreamPayload(event);
 
-            if (event.event === "thinking") {
-              setLlmThinking(true);
-              continue;
-            }
-
             if (event.event === "fallback") {
-              setLlmThinking(false);
-              setStreamWords([]);
               continue;
             }
 
-            if (event.event === "word" && payload.word) {
-              const word = payload.word;
-              setStreamWords((current) => [
-                ...current,
-                toStreamingWordRecord(username, word, current.length)
-              ]);
+            if (event.event === "thinking" || event.event === "word") {
               continue;
             }
 
@@ -483,12 +465,6 @@ export default function Home() {
               setStudyWords((current) =>
                 replaceCurrent ? completedWords : appendUniqueWords(current, completedWords)
               );
-              setStreamWords([]);
-              setLlmThinking(false);
-              setAutoNextRemaining(autoNextSeconds);
-              setAutoNextPending(completedWords.length >= wordBatchSize);
-              setAutoNextWordIds(completedWords.map((word) => word.id));
-              setAutoNextArmed(false);
               continue;
             }
 
@@ -511,90 +487,81 @@ export default function Home() {
 
       setTab("study");
     } catch (recommendError) {
-      setStreamWords([]);
-      setLlmThinking(false);
-      setError(recommendError instanceof Error ? recommendError.message : "推荐失败");
+      const message = recommendError instanceof Error ? recommendError.message : "推荐失败";
+      const retryDelayMs = getRecommendationRetryDelayMs(message);
+      setRecommendationRetryAt(Date.now() + (retryDelayMs ?? recommendationRetryFallbackMs));
+      setError(retryDelayMs ? null : message);
     } finally {
       recommendationRequestRef.current = false;
-      setBusy(null);
+      setRecommendationBusy(false);
     }
   }, [username]);
 
-  const startAutoNextCountdown = useCallback(() => {
-    setAutoNextPending(false);
-    setAutoNextRemaining(autoNextSeconds);
-    setAutoNextArmed(true);
-  }, []);
-
-  const stopAutoNextCountdown = useCallback(() => {
-    setAutoNextPending(false);
-    setAutoNextWordIds([]);
-    setAutoNextArmed(false);
-  }, []);
-
   useEffect(() => {
-    if (
-      !autoNextPending ||
-      autoNextArmed ||
-      busy !== null ||
-      tab !== "study" ||
-      autoNextWordIds.length === 0
-    ) {
+    if (recommendationRetryAt === null) {
       return;
     }
 
-    const wordsById = new Map(displayedStudyWords.map((word) => [word.id, word]));
-    const allPendingWordsClicked = autoNextWordIds.every((wordId) => {
-      const word = wordsById.get(wordId);
-      return Boolean(word && word.status !== "new");
-    });
-
-    if (allPendingWordsClicked) {
-      startAutoNextCountdown();
-    }
-  }, [
-    autoNextArmed,
-    autoNextPending,
-    autoNextWordIds,
-    busy,
-    displayedStudyWords,
-    startAutoNextCountdown,
-    tab
-  ]);
-
-  useEffect(() => {
-    if (
-      !autoNextArmed ||
-      busy !== null ||
-      tab !== "study" ||
-      displayedStudyWords.length < wordBatchSize
-    ) {
-      return;
-    }
-
-    if (autoNextRemaining <= 0) {
-      setAutoNextArmed(false);
-      void generateRecommendations({ replaceCurrent: true });
+    const retryInMs = recommendationRetryAt - Date.now();
+    if (retryInMs <= 0) {
+      setRecommendationRetryAt(null);
       return;
     }
 
     const timer = window.setTimeout(() => {
-      setAutoNextRemaining((remaining) => remaining - 1);
-    }, 1000);
+      setRecommendationRetryAt(null);
+    }, retryInMs);
 
     return () => window.clearTimeout(timer);
+  }, [recommendationRetryAt]);
+
+  useEffect(() => {
+    const systemBusy =
+      busy === "boot" ||
+      busy === "state" ||
+      busy === "create" ||
+      busy === "assessment" ||
+      busy === "submit" ||
+      busy === "import" ||
+      busy === "reset" ||
+      busy === "rename" ||
+      busy === "export" ||
+      Boolean(busy?.startsWith("goal:"));
+
+    if (
+      !username ||
+      !state?.user.assessmentCompletedAt ||
+      assessment ||
+      tab !== "study" ||
+      systemBusy ||
+      recommendationBusy ||
+      (recommendationRetryAt !== null && recommendationRetryAt > Date.now()) ||
+      recommendationRequestRef.current ||
+      queuedStudyWords.length >= studyQueueTargetSize
+    ) {
+      return;
+    }
+
+    void generateRecommendations({ count: singleRecommendationCount });
   }, [
-    autoNextArmed,
-    autoNextRemaining,
+    assessment,
     busy,
-    displayedStudyWords.length,
     generateRecommendations,
-    tab
+    queuedStudyWords.length,
+    recommendationBusy,
+    recommendationRetryAt,
+    state?.user.assessmentCompletedAt,
+    tab,
+    username
   ]);
 
-  async function actOnWord(wordId: string, action: WordAction) {
+  async function actOnWord(
+    wordId: string,
+    action: WordAction,
+    options?: { skipStudyWordsUpdate?: boolean }
+  ): Promise<boolean> {
     if (!username) {
-      return;
+      return false;
     }
 
     try {
@@ -605,12 +572,41 @@ export default function Home() {
         body: JSON.stringify({ username, wordId, action })
       });
       setState(payload.state);
-      setStudyWords((current) => applyWordUpdates(current, payload.state));
+      if (!options?.skipStudyWordsUpdate) {
+        setStudyWords((current) => applyWordUpdates(current, payload.state));
+      }
+      return true;
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : "记录失败");
+      return false;
     } finally {
       setBusy(null);
     }
+  }
+
+  function actOnStudyWord(word: WordRecordRow, action: WordAction) {
+    if (busy === word.id || discardingWord) {
+      return;
+    }
+
+    setDiscardingWord({ id: word.id, action });
+    const removalTimer = window.setTimeout(() => {
+      setStudyWords((current) => current.filter((currentWord) => currentWord.id !== word.id));
+    }, swipeExitMs);
+
+    void (async () => {
+      const success = await actOnWord(word.id, action, { skipStudyWordsUpdate: true });
+      if (!success) {
+        window.clearTimeout(removalTimer);
+        setStudyWords((current) =>
+          current.some((currentWord) => currentWord.id === word.id) ? current : [word, ...current]
+        );
+      }
+
+      window.setTimeout(() => {
+        setDiscardingWord((current) => (current?.id === word.id ? null : current));
+      }, swipeExitMs);
+    })();
   }
 
   async function importDatabase(event: ChangeEvent<HTMLInputElement>) {
@@ -623,11 +619,9 @@ export default function Home() {
       setBusy("import");
       setError(null);
       setStudyWords([]);
-      setStreamWords([]);
-      setLlmThinking(false);
-      setAutoNextPending(false);
-      setAutoNextWordIds([]);
-      setAutoNextArmed(false);
+      setRecommendationBusy(false);
+      setRecommendationRetryAt(null);
+      setDiscardingWord(null);
       const formData = new FormData();
       formData.append("username", username);
       formData.append("file", file);
@@ -638,7 +632,7 @@ export default function Home() {
       window.localStorage.setItem(usernameKey, payload.username);
       setUsername(payload.username);
       setState(payload.state);
-      setStudyWords(payload.state.latestWords);
+      setStudyWords(getStudyWordsFromState(payload.state));
       setTab("study");
     } catch (importError) {
       setError(importError instanceof Error ? importError.message : "导入失败");
@@ -657,17 +651,15 @@ export default function Home() {
       setBusy("reset");
       setError(null);
       setStudyWords([]);
-      setStreamWords([]);
-      setLlmThinking(false);
-      setAutoNextPending(false);
-      setAutoNextWordIds([]);
-      setAutoNextArmed(false);
+      setRecommendationBusy(false);
+      setRecommendationRetryAt(null);
+      setDiscardingWord(null);
       const payload = await api<{ state: UserState }>("/api/users/reset", {
         method: "POST",
         body: JSON.stringify({ username })
       });
       setState(payload.state);
-      setStudyWords(payload.state.latestWords);
+      setStudyWords(getStudyWordsFromState(payload.state));
       setAssessment(null);
       setAnswers({});
       setQuestionIndex(0);
@@ -694,11 +686,8 @@ export default function Home() {
     try {
       setBusy("rename");
       setError(null);
-      setStreamWords([]);
-      setLlmThinking(false);
-      setAutoNextPending(false);
-      setAutoNextWordIds([]);
-      setAutoNextArmed(false);
+      setRecommendationRetryAt(null);
+      setDiscardingWord(null);
       const payload = await api<{ username: string; state: UserState }>("/api/users/rename", {
         method: "POST",
         body: JSON.stringify({ username, newUsername: nextUsername })
@@ -706,7 +695,7 @@ export default function Home() {
       window.localStorage.setItem(usernameKey, payload.username);
       setUsername(payload.username);
       setState(payload.state);
-      setStudyWords(payload.state.latestWords);
+      setStudyWords(getStudyWordsFromState(payload.state));
     } catch (renameError) {
       setError(renameError instanceof Error ? renameError.message : "修改失败");
     } finally {
@@ -722,17 +711,15 @@ export default function Home() {
     try {
       setBusy(`goal:${nextLearningGoal}`);
       setError(null);
-      setStreamWords([]);
-      setLlmThinking(false);
-      setAutoNextPending(false);
-      setAutoNextWordIds([]);
-      setAutoNextArmed(false);
+      setRecommendationBusy(false);
+      setRecommendationRetryAt(null);
+      setDiscardingWord(null);
       const payload = await api<{ state: UserState }>("/api/users/learning-goal", {
         method: "POST",
         body: JSON.stringify({ username, learningGoal: nextLearningGoal })
       });
       setState(payload.state);
-      setStudyWords(payload.state.latestWords);
+      setStudyWords(getStudyWordsFromState(payload.state));
       setAssessment(null);
       setAnswers({});
       setQuestionIndex(0);
@@ -824,6 +811,7 @@ export default function Home() {
               <span className="rounded-md bg-leaf/10 px-2 py-1 text-[11px] font-black text-leaf">
                 {state.user.estimatedLevel ?? "初测"}
               </span>
+              <WordQueueDots readyCount={queuedStudyWords.length} total={studyQueueTargetSize} />
             </div>
           </div>
         ) : (
@@ -870,16 +858,15 @@ export default function Home() {
             answers={answers}
             answeredCount={answeredCount}
             latestWords={displayedStudyWords}
-            streamWords={streamWords}
-            llmThinking={llmThinking}
-            autoNextArmed={autoNextArmed}
-            autoNextRemaining={autoNextRemaining}
-            onStopAutoNext={stopAutoNextCountdown}
+            recommendationBusy={recommendationBusy}
+            recommendationRetryAt={recommendationRetryAt}
+            queueTargetSize={studyQueueTargetSize}
+            exitingWord={discardingWord}
             onStartAssessment={startAssessment}
             onPickAnswer={pickAnswer}
             onNextQuestion={nextQuestion}
             onGenerate={generateRecommendations}
-            onAct={actOnWord}
+            onAct={actOnStudyWord}
           />
         ) : tab === "history" ? (
           <HistoryView words={state.history} busy={busy} onAct={actOnWord} />
@@ -900,7 +887,7 @@ export default function Home() {
       </section>
 
       {username ? (
-        <nav className="safe-pad fixed bottom-0 left-1/2 z-20 w-full max-w-[520px] -translate-x-1/2 pb-[max(10px,env(safe-area-inset-bottom))] pt-2">
+        <nav className="safe-pad fixed bottom-0 left-1/2 z-40 w-full max-w-[520px] -translate-x-1/2 pb-[max(10px,env(safe-area-inset-bottom))] pt-2">
           <div className="bottom-nav grid grid-cols-3 rounded-lg border border-line bg-white/95 p-1 shadow-soft backdrop-blur-xl">
           <TabButton active={tab === "study"} label="学习" icon={<Sparkles size={19} />} onClick={() => setTab("study")} />
           <TabButton active={tab === "history"} label="记录" icon={<History size={19} />} onClick={() => setTab("history")} />
@@ -917,6 +904,32 @@ export default function Home() {
         onChange={importDatabase}
       />
     </main>
+  );
+}
+
+function WordQueueDots({
+  readyCount,
+  total
+}: {
+  readyCount: number;
+  total: number;
+}) {
+  return (
+    <div
+      className="word-queue-dots flex items-center gap-1 pt-0.5"
+      aria-label={`单词准备状态：${Math.min(readyCount, total)}/${total}`}
+      role="img"
+    >
+      {Array.from({ length: total }, (_, index) => (
+        <span
+          key={index}
+          className={`queue-dot h-1.5 w-1.5 rounded-full transition-colors duration-200 ${
+            index < readyCount ? "bg-leaf" : "bg-line"
+          }`}
+          aria-hidden
+        />
+      ))}
+    </div>
   );
 }
 
@@ -1042,11 +1055,10 @@ function StudyView({
   answers,
   answeredCount,
   latestWords,
-  streamWords,
-  llmThinking,
-  autoNextArmed,
-  autoNextRemaining,
-  onStopAutoNext,
+  recommendationBusy,
+  recommendationRetryAt,
+  queueTargetSize,
+  exitingWord,
   onStartAssessment,
   onPickAnswer,
   onNextQuestion,
@@ -1062,50 +1074,24 @@ function StudyView({
   answers: Record<string, string>;
   answeredCount: number;
   latestWords: WordRecordRow[];
-  streamWords: WordRecordRow[];
-  llmThinking: boolean;
-  autoNextArmed: boolean;
-  autoNextRemaining: number;
-  onStopAutoNext: () => void;
+  recommendationBusy: boolean;
+  recommendationRetryAt: number | null;
+  queueTargetSize: number;
+  exitingWord: { id: string; action: WordAction } | null;
   onStartAssessment: () => void;
   onPickAnswer: (questionId: string, option: string) => void;
   onNextQuestion: () => void;
   onGenerate: (options?: GenerateRecommendationsOptions) => void;
-  onAct: (wordId: string, action: WordAction) => void;
+  onAct: (word: WordRecordRow, action: WordAction) => void;
 }) {
-  const isGenerating = busy === "recommend";
-  const displayedWords = useMemo(
-    () => (streamWords.length > 0 ? [...latestWords, ...streamWords] : latestWords),
-    [latestWords, streamWords]
+  const queuedWords = useMemo(
+    () => latestWords.filter((word) => word.status === "new").slice(0, queueTargetSize),
+    [latestWords, queueTargetSize]
   );
-  const showAutoNext = autoNextArmed && !isGenerating && displayedWords.length >= wordBatchSize;
-  const [collapsedWordIds, setCollapsedWordIds] = useState<Set<string>>(
-    () => new Set(displayedWords.filter((word) => word.status !== "new").map((word) => word.id))
-  );
-  const allWordCardsCollapsed =
-    !isGenerating &&
-    displayedWords.length >= wordBatchSize &&
-    displayedWords.every((word) => collapsedWordIds.has(word.id));
-
-  useEffect(() => {
-    const visibleIds = new Set(displayedWords.map((word) => word.id));
-    setCollapsedWordIds((current) => {
-      const next = new Set([...current].filter((wordId) => visibleIds.has(wordId)));
-      return next.size === current.size ? current : next;
-    });
-  }, [displayedWords]);
-
-  function setWordCollapsed(wordId: string, collapsed: boolean) {
-    setCollapsedWordIds((current) => {
-      const next = new Set(current);
-      if (collapsed) {
-        next.add(wordId);
-      } else {
-        next.delete(wordId);
-      }
-      return next;
-    });
-  }
+  const currentWord = queuedWords[0] ?? null;
+  const exitAction = currentWord && exitingWord?.id === currentWord.id ? exitingWord.action : null;
+  const waitingForRetry = recommendationRetryAt !== null && recommendationRetryAt > Date.now();
+  const preparingWords = recommendationBusy || waitingForRetry;
 
   if (!state.user.assessmentCompletedAt && !assessment) {
     return (
@@ -1118,7 +1104,7 @@ function StudyView({
             <p className="text-sm font-black text-amber">10 题初测</p>
             <h2 className="mt-1 text-2xl font-black leading-tight text-ink">先定位词汇难度</h2>
             <p className="mt-2 text-sm font-semibold leading-6 text-steel">
-              完成后会生成贴近当前水平的第一批单词。
+              完成后会直接进入贴近当前水平的学习节奏。
             </p>
           </div>
         </div>
@@ -1188,19 +1174,18 @@ function StudyView({
     );
   }
 
-  if (result && displayedWords.length === 0) {
+  if (result && !currentWord && state.stats.totalWords === 0) {
     return (
       <ResultPanel
         result={result}
-        busy={isGenerating}
-        streamCount={streamWords.length}
-        llmThinking={llmThinking}
+        busy={preparingWords}
+        recommendationRetryAt={recommendationRetryAt}
         onGenerate={onGenerate}
       />
     );
   }
 
-  if (displayedWords.length === 0) {
+  if (!currentWord) {
     return (
       <div className="surface-card stage-card p-5">
         <div className="flex items-start gap-3">
@@ -1209,75 +1194,41 @@ function StudyView({
           </div>
           <div>
             <p className="text-sm font-black text-leaf">等级 {state.user.estimatedLevel}</p>
-            <h2 className="mt-1 text-2xl font-black leading-tight text-ink">生成下一批单词</h2>
+            <h2 className="mt-1 text-2xl font-black leading-tight text-ink">正在准备下一个单词</h2>
           </div>
         </div>
-        {isGenerating ? <GenerationStatus thinking={llmThinking} count={streamWords.length} /> : null}
+        {preparingWords ? <GenerationStatus recommendationRetryAt={recommendationRetryAt} /> : null}
         <button
           className="button-base generate-button mt-6 w-full bg-leaf px-4 text-white shadow-press"
-          disabled={isGenerating}
-          onClick={() => onGenerate()}
+          disabled={preparingWords}
+          onClick={() => onGenerate({ count: singleRecommendationCount })}
         >
-          {isGenerating ? (
+          {preparingWords ? (
             <Loader2 className="animate-spin" size={20} aria-hidden />
           ) : (
             <Sparkles size={20} aria-hidden />
           )}
-          生成 {wordBatchSize} 个词
+          开始学习
         </button>
       </div>
     );
   }
 
   return (
-    <div className={allWordCardsCollapsed ? "space-y-2" : "space-y-4"}>
-      {allWordCardsCollapsed ? null : (
-        <div className="grid grid-cols-3 gap-2.5">
-          <Metric label="已学会" value={state.stats.learned} tone="leaf" />
-          <Metric label="太简单" value={state.stats.tooEasy} tone="amber" />
-          <Metric label="继续学" value={state.stats.learning} tone="steel" />
-        </div>
-      )}
-      <div className={`control-card list-toolbar flex items-center justify-between gap-3 px-3 py-3 ${allWordCardsCollapsed ? "min-h-9" : ""}`}>
-        <div>
-          <p className={allWordCardsCollapsed ? "text-xs font-bold text-steel" : "text-sm font-bold text-steel"}>
-            学习列表
-          </p>
-          <h2 className={allWordCardsCollapsed ? "text-xl font-black text-ink" : "text-2xl font-black text-ink"}>
-            {isGenerating ? `已接收 ${streamWords.length}/${wordBatchSize}` : `${displayedWords.length} 个词`}
-          </h2>
-        </div>
-        <button
-          className="button-base batch-button bg-ink px-3 text-sm text-white shadow-press"
-          disabled={isGenerating}
-          onClick={() => onGenerate({ replaceCurrent: true })}
-        >
-          {isGenerating ? (
-            <Loader2 className="animate-spin" size={18} aria-hidden />
-          ) : (
-            <RotateCcw size={18} aria-hidden />
-          )}
-          获取下一批
-        </button>
+    <div className="space-y-4">
+      <div className="grid grid-cols-3 gap-2.5">
+        <Metric label="已学会" value={state.stats.learned} tone="leaf" />
+        <Metric label="太简单" value={state.stats.tooEasy} tone="amber" />
+        <Metric label="继续学" value={state.stats.learning} tone="steel" />
       </div>
-      {isGenerating ? <GenerationStatus thinking={llmThinking} count={streamWords.length} /> : null}
-      <div className={allWordCardsCollapsed ? "space-y-1.5" : "space-y-3"}>
-        {displayedWords.map((word) => (
-          <WordCard
-            key={word.id}
-            word={word}
-            busy={busy === word.id}
-            actionsDisabled={isGenerating}
-            collapsed={collapsedWordIds.has(word.id)}
-            compact={allWordCardsCollapsed}
-            onCollapsedChange={(collapsed) => setWordCollapsed(word.id, collapsed)}
-            onAct={onAct}
-          />
-        ))}
+      <div className="single-card-stage">
+        <StudyWordCard
+          word={currentWord}
+          busy={busy === currentWord.id}
+          exitAction={exitAction}
+          onAct={onAct}
+        />
       </div>
-      {showAutoNext ? (
-        <AutoNextCountdown remaining={autoNextRemaining} onStop={onStopAutoNext} />
-      ) : null}
     </div>
   );
 }
@@ -1285,14 +1236,12 @@ function StudyView({
 function ResultPanel({
   result,
   busy,
-  streamCount,
-  llmThinking,
+  recommendationRetryAt,
   onGenerate
 }: {
   result: SubmitResult;
   busy: boolean;
-  streamCount: number;
-  llmThinking: boolean;
+  recommendationRetryAt: number | null;
   onGenerate: (options?: GenerateRecommendationsOptions) => void;
 }) {
   const levelSummary = getEstimatedLevelSummary(result.estimatedLevel, result.targetDifficulty);
@@ -1316,10 +1265,14 @@ function ResultPanel({
         <Metric label="等级" value={result.estimatedLevel} tone="steel" />
         <Metric label="目标" value={result.targetDifficulty} tone="amber" />
       </div>
-      {busy ? <GenerationStatus thinking={llmThinking} count={streamCount} /> : null}
-      <button className="button-base generate-button mt-6 w-full bg-leaf px-4 text-white shadow-press" disabled={busy} onClick={() => onGenerate()}>
+      {busy ? <GenerationStatus recommendationRetryAt={recommendationRetryAt} /> : null}
+      <button
+        className="button-base generate-button mt-6 w-full bg-leaf px-4 text-white shadow-press"
+        disabled={busy}
+        onClick={() => onGenerate({ count: singleRecommendationCount })}
+      >
         {busy ? <Loader2 className="animate-spin" size={20} aria-hidden /> : <Sparkles size={20} aria-hidden />}
-        生成 {wordBatchSize} 个词
+        开始学习
       </button>
     </div>
   );
@@ -1338,146 +1291,94 @@ function getEstimatedLevelSummary(level: string, targetDifficulty: number): stri
   return `${base} 后续推荐会从难度 ${targetDifficulty} 附近开始。`;
 }
 
-function GenerationStatus({ thinking, count }: { thinking: boolean; count: number }) {
-  const label = thinking
-    ? "LLM 正在思考，单词生成后会逐个出现"
-    : count > 0
-      ? `已接收 ${count}/${wordBatchSize} 个词`
-      : "正在连接 LLM";
+function GenerationStatus({
+  recommendationRetryAt
+}: {
+  recommendationRetryAt?: number | null;
+}) {
+  const retrySeconds =
+    recommendationRetryAt && recommendationRetryAt > Date.now()
+      ? Math.max(1, Math.ceil((recommendationRetryAt - Date.now()) / 1000))
+      : null;
 
   return (
     <div className="mt-4 flex min-h-11 items-center gap-2 rounded-lg border border-amber/25 bg-amber/10 px-3 text-sm font-bold text-amber">
       <Loader2 className="shrink-0 animate-spin" size={16} aria-hidden />
-      <span>{label}</span>
+      <span>
+        {retrySeconds
+          ? `正在等待服务恢复，约 ${retrySeconds} 秒`
+          : "正在准备下一个单词"}
+      </span>
     </div>
   );
 }
 
-function AutoNextCountdown({
-  remaining,
-  onStop
-}: {
-  remaining: number;
-  onStop: () => void;
-}) {
-  const seconds = Math.max(remaining, 1);
-  const progress = `${Math.min(100, Math.max(0, ((autoNextSeconds - remaining) / autoNextSeconds) * 100))}%`;
-
-  return (
-    <div className="safe-pad fixed bottom-24 left-1/2 z-30 w-full max-w-[520px] -translate-x-1/2">
-      <div className="surface-card p-3">
-        <div className="flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <p className="text-sm font-black text-ink">{seconds} 秒后获取下一批单词</p>
-            <p className="mt-1 text-xs font-semibold text-steel">新单词会替换当前学习列表</p>
-          </div>
-          <button
-            className="button-base stop-button min-h-9 shrink-0 border border-coral/25 bg-coral/10 px-3 text-sm text-coral"
-            onClick={onStop}
-          >
-            <CircleStop size={16} aria-hidden />
-            停止
-          </button>
-        </div>
-        <div className="mt-3 h-2 overflow-hidden rounded-full bg-black/5">
-          <div className="h-full rounded-full bg-leaf transition-[width] duration-1000" style={{ width: progress }} />
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function WordCard({
+function StudyWordCard({
   word,
   busy,
-  actionsDisabled = false,
-  collapsed,
-  compact,
-  onCollapsedChange,
+  exitAction,
   onAct
 }: {
   word: WordRecordRow;
   busy: boolean;
-  actionsDisabled?: boolean;
-  collapsed: boolean;
-  compact: boolean;
-  onCollapsedChange: (collapsed: boolean) => void;
-  onAct: (wordId: string, action: WordAction) => void;
+  exitAction: WordAction | null;
+  onAct: (word: WordRecordRow, action: WordAction) => void;
 }) {
-  const disabled = busy || actionsDisabled;
-  const actAndCollapse = (action: WordAction) => {
-    onCollapsedChange(true);
-    onAct(word.id, action);
-  };
+  const disabled = busy || Boolean(exitAction);
+  const exitClass =
+    exitAction === "learned"
+      ? "swipe-exit-right"
+      : exitAction === "too_easy"
+        ? "swipe-exit-up"
+        : exitAction === "learning"
+          ? "swipe-exit-left"
+          : "";
 
   return (
     <article
-      className={`word-card border bg-white transition-[padding,box-shadow,border-color] duration-200 ${
-        collapsed
-          ? "rounded-lg border-line px-3 py-2 shadow-none"
-          : "rounded-lg border-line p-4 shadow-soft"
-      }`}
+      className={`word-card single-word-card rounded-lg border border-line bg-white p-4 shadow-soft ${exitClass}`}
     >
-      <button
-        className={`flex w-full cursor-pointer justify-between gap-2 text-left ${collapsed ? "items-center" : "items-start"}`}
-        aria-expanded={!collapsed}
-        onClick={() => onCollapsedChange(!collapsed)}
-      >
+      <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <h3 className={`${collapsed ? "truncate text-base" : "break-words text-3xl leading-tight"} font-black text-ink`}>{word.word}</h3>
-          <p className={`${collapsed ? "mt-0 truncate text-[11px]" : "mt-1 text-sm"} font-bold text-steel`}>
+          <h3 className="break-words text-4xl font-black leading-tight text-ink">{word.word}</h3>
+          <p className="mt-1 text-sm font-bold text-steel">
             {word.partOfSpeech} · 难度 {word.difficulty}
           </p>
         </div>
-        <div className={`flex shrink-0 items-center ${compact ? "gap-1" : "gap-2"}`}>
-          <StatusBadge status={word.status} compact={collapsed} />
-          <span
-            className={`flex items-center justify-center rounded-md bg-lilac text-iris ${
-              collapsed ? "h-6 w-6" : "h-7 w-7"
-            }`}
-          >
-            {collapsed ? <ChevronDown size={14} aria-hidden /> : <ChevronUp size={16} aria-hidden />}
-          </span>
-        </div>
-      </button>
-      <div
-        aria-hidden={collapsed}
-        className={`grid transition-[grid-template-rows,opacity,transform] duration-300 ease-out ${
-          collapsed ? "grid-rows-[0fr] -translate-y-2 opacity-0" : "grid-rows-[1fr] translate-y-0 opacity-100"
-        }`}
-        inert={collapsed ? true : undefined}
-      >
-        <div className="overflow-hidden">
-          <p className="definition-chip mt-4 rounded-lg border border-leaf/20 bg-leaf/10 px-3 py-2 text-lg font-black leading-7 text-leaf">{word.definitionZh}</p>
-          <p className="example-chip mt-3 rounded-lg bg-mist px-3 py-3 text-sm font-semibold leading-6 text-ink">{word.exampleEn}</p>
-          <p className="mt-2 px-1 text-sm font-semibold leading-6 text-steel">{word.exampleZh}</p>
-          <p className="reason-note mt-3 border-l-4 border-amber/60 bg-amber/10 px-3 py-2 text-sm font-semibold leading-6 text-steel">
-            {word.difficultyReason}
-          </p>
-          <div className="mt-4 grid grid-cols-3 gap-2">
-            <ActionButton
-              label="会了"
-              icon={<CheckCircle2 size={18} aria-hidden />}
-              disabled={disabled}
-              active={word.status === "learned"}
-              onClick={() => actAndCollapse("learned")}
-            />
-            <ActionButton
-              label="简单"
-              icon={<TrendingUp size={18} aria-hidden />}
-              disabled={disabled}
-              active={word.status === "too_easy"}
-              onClick={() => actAndCollapse("too_easy")}
-            />
-            <ActionButton
-              label="继续"
-              icon={<RotateCcw size={18} aria-hidden />}
-              disabled={disabled}
-              active={word.status === "learning"}
-              onClick={() => actAndCollapse("learning")}
-            />
-          </div>
-        </div>
+        <StatusBadge status={word.status} />
+      </div>
+      <p className="definition-chip mt-5 rounded-lg border border-leaf/20 bg-leaf/10 px-3 py-2 text-lg font-black leading-7 text-leaf">
+        {word.definitionZh}
+      </p>
+      <p className="example-chip mt-3 rounded-lg bg-mist px-3 py-3 text-sm font-semibold leading-6 text-ink">
+        {word.exampleEn}
+      </p>
+      <p className="mt-2 px-1 text-sm font-semibold leading-6 text-steel">{word.exampleZh}</p>
+      <p className="reason-note mt-3 border-l-4 border-amber/60 bg-amber/10 px-3 py-2 text-sm font-semibold leading-6 text-steel">
+        {word.difficultyReason}
+      </p>
+      <div className="mt-5 grid grid-cols-3 gap-2">
+        <ActionButton
+          label="会了"
+          icon={<CheckCircle2 size={18} aria-hidden />}
+          disabled={disabled}
+          active={false}
+          onClick={() => onAct(word, "learned")}
+        />
+        <ActionButton
+          label="简单"
+          icon={<TrendingUp size={18} aria-hidden />}
+          disabled={disabled}
+          active={false}
+          onClick={() => onAct(word, "too_easy")}
+        />
+        <ActionButton
+          label="继续"
+          icon={<RotateCcw size={18} aria-hidden />}
+          disabled={disabled}
+          active={false}
+          onClick={() => onAct(word, "learning")}
+        />
       </div>
     </article>
   );

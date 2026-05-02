@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { usernameSchema, fail, ok } from "@/lib/api";
+import { appConfig } from "@/lib/appConfig";
 import { getStorage } from "@/lib/db/storage";
 import { recommendWords } from "@/lib/llm/recommendations";
 import { serverConfig } from "@/lib/serverConfig";
@@ -14,12 +15,13 @@ import {
 export const runtime = "nodejs";
 
 const bodySchema = z.object({
-  username: usernameSchema
+  username: usernameSchema,
+  count: z.number().int().min(1).max(appConfig.wordBatchSize).default(appConfig.wordBatchSize)
 });
 
 export async function POST(request: Request) {
   try {
-    const { username } = bodySchema.parse(await request.json());
+    const { username, count } = bodySchema.parse(await request.json());
     const storage = await getStorage();
     const clientIp = getClientIp(request);
     await requireUserAuth(request, storage, username);
@@ -44,7 +46,7 @@ export async function POST(request: Request) {
 
     try {
       const context = await storage.getLearningContext(username);
-      const result = await recommendWords(context);
+      const result = await recommendWords(context, { wordCount: count });
       const batch = await storage.createRecommendationBatch(
         username,
         result.words,
@@ -57,6 +59,7 @@ export async function POST(request: Request) {
         username,
         source: result.source,
         wordCount: batch.words.length,
+        requestedWords: count,
         batchId: batch.batch.id
       });
 

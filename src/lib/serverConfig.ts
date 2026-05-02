@@ -101,16 +101,16 @@ export const serverConfig: {
     },
     recommendationRateLimit: {
       windowMs: 60_000,
-      max: 4,
+      max: 40,
       lockTtlMs: 45_000
     },
     recommendationIpRateLimit: {
       windowMs: 60_000,
-      max: 8
+      max: 80
     },
     recommendationGlobalRateLimit: {
       windowMs: 60_000,
-      max: 30
+      max: 300
     },
     importLimits: {
       maxFileBytes: 5 * 1024 * 1024,

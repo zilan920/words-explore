@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { ApiError, usernameSchema, fail } from "@/lib/api";
+import { appConfig } from "@/lib/appConfig";
 import { getStorage, type StorageAdapter } from "@/lib/db/storage";
 import { streamRecommendationWords, type RecommendationStreamEvent } from "@/lib/llm/recommendations";
 import { serverConfig } from "@/lib/serverConfig";
@@ -16,18 +17,21 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const bodySchema = z.object({
-  username: usernameSchema
+  username: usernameSchema,
+  count: z.number().int().min(1).max(appConfig.wordBatchSize).default(appConfig.wordBatchSize)
 });
 
 export async function POST(request: Request) {
   const requestId = randomUUID();
   let username = "";
+  let requestedWords = appConfig.wordBatchSize;
   let storage!: StorageAdapter;
   let releaseLock!: () => Promise<void>;
 
   try {
     const body = bodySchema.parse(await request.json());
     username = body.username;
+    requestedWords = body.count;
     storage = await getStorage();
     const clientIp = getClientIp(request);
     await requireUserAuth(request, storage, username);
@@ -51,7 +55,8 @@ export async function POST(request: Request) {
     );
     console.info("[api/recommendations/stream] accepted", {
       requestId,
-      username
+      username,
+      requestedWords
     });
   } catch (error) {
     console.warn("[api/recommendations/stream] rejected", {
@@ -118,13 +123,14 @@ export async function POST(request: Request) {
               index: event.index,
               word: event.word
             });
-          }, { requestId });
+          }, { requestId, wordCount: requestedWords });
 
           console.info("[api/recommendations/stream] creating batch", {
             requestId,
             username,
             source: result.source,
-            wordCount: result.words.length
+            wordCount: result.words.length,
+            requestedWords
           });
 
           const batch = await storage.createRecommendationBatch(

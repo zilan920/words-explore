@@ -11,7 +11,6 @@ import { serverConfig, type ServerLlmConfig } from "@/lib/serverConfig";
 import type { LearningContext, RecommendationWordInput } from "@/lib/types";
 
 const { wordBatchSize } = appConfig;
-const maxSingleWordAttempts = wordBatchSize * 2;
 
 const compactText = (min: number, max: number) =>
   z
@@ -87,13 +86,18 @@ export interface LlmProviderConfig {
 
 export interface RecommendationDiagnosticsOptions {
   requestId?: string;
+  wordCount?: number;
 }
 
-export async function recommendWords(context: LearningContext): Promise<RecommendationResult> {
+export async function recommendWords(
+  context: LearningContext,
+  options: RecommendationDiagnosticsOptions = {}
+): Promise<RecommendationResult> {
+  const targetWordCount = normalizeRequestedWordCount(options.wordCount);
   const config = resolveLlmConfig();
   if (!config) {
     console.info("[llm] no provider config found; using mock recommendations");
-    return mockRecommendations(context);
+    return mockRecommendations(context, targetWordCount);
   }
 
   const startedAt = Date.now();
@@ -106,10 +110,15 @@ export async function recommendWords(context: LearningContext): Promise<Recommen
       timeoutMs: config.timeoutMs,
       maxTokens: config.maxTokens,
       temperature: config.temperature,
+      requestedWords: targetWordCount,
       wordsPerRequest: config.wordsPerRequest,
       thinking: config.thinking
     });
-    const words = await callOpenAiCompatibleProviderBatch(context, config, { startedAt });
+    const words = await callOpenAiCompatibleProviderBatch(context, config, {
+      startedAt,
+      diagnostics: options,
+      wordCount: targetWordCount
+    });
     console.info("[llm] recommendations generated", {
       provider: config.provider,
       model: config.model,
@@ -124,7 +133,7 @@ export async function recommendWords(context: LearningContext): Promise<Recommen
       durationMs: Date.now() - startedAt,
       error: error instanceof Error ? error.message : String(error)
     });
-    return mockRecommendations(context);
+    return mockRecommendations(context, targetWordCount);
   }
 }
 
@@ -133,12 +142,14 @@ export async function streamRecommendationWords(
   onEvent: (event: RecommendationStreamEvent) => void,
   diagnostics: RecommendationDiagnosticsOptions = {}
 ): Promise<RecommendationResult> {
+  const targetWordCount = normalizeRequestedWordCount(diagnostics.wordCount);
   const config = resolveLlmConfig();
   if (!config) {
     console.info("[llm] no provider config found; streaming mock recommendations", {
-      requestId: diagnostics.requestId
+      requestId: diagnostics.requestId,
+      requestedWords: targetWordCount
     });
-    const result = mockRecommendations(context);
+    const result = mockRecommendations(context, targetWordCount);
     onEvent({ type: "fallback", reason: "missing_provider_config" });
     emitRecommendationWords(result, onEvent);
     return result;
@@ -164,6 +175,7 @@ export async function streamRecommendationWords(
       temperature: config.temperature,
       thinking: config.thinking,
       requestMode: "words-array-loop",
+      requestedWords: targetWordCount,
       wordsPerRequest: config.wordsPerRequest
     });
 
@@ -173,6 +185,7 @@ export async function streamRecommendationWords(
       {
         startedAt,
         diagnostics,
+        wordCount: targetWordCount,
         onWord: (word, index) => {
           onEvent({
             type: "word",
@@ -200,7 +213,7 @@ export async function streamRecommendationWords(
       durationMs: Date.now() - startedAt,
       error: reason
     });
-    const result = mockRecommendations(context);
+    const result = mockRecommendations(context, targetWordCount);
     onEvent({ type: "fallback", reason: sanitizeProviderError(reason) });
     emitRecommendationWords(result, onEvent);
     return result;
@@ -260,6 +273,20 @@ export function resolveLlmConfig(
 
 export function validateRecommendationWords(value: unknown): RecommendationWordInput[] {
   const parsed = parseRecommendationPayload(value);
+  return validateUniqueRecommendationWords(parsed);
+}
+
+function validateRecommendationWordList(
+  value: RecommendationWordInput[],
+  expectedCount: number
+): RecommendationWordInput[] {
+  const parsed = z.array(recommendationWordSchema).length(expectedCount).parse(value);
+  return validateUniqueRecommendationWords(parsed);
+}
+
+function validateUniqueRecommendationWords(
+  parsed: RecommendationWordInput[]
+): RecommendationWordInput[] {
   const seen = new Set<string>();
 
   for (const word of parsed) {
@@ -353,6 +380,7 @@ export function consumeDelimitedRecommendationWords(
 
 interface BatchGenerationOptions {
   startedAt: number;
+  wordCount: number;
   diagnostics?: RecommendationDiagnosticsOptions;
   onWord?: (word: RecommendationWordInput, index: number) => void;
 }
@@ -370,16 +398,21 @@ async function callOpenAiCompatibleProviderBatch(
   });
   const words: RecommendationWordInput[] = [];
   const diagnostics = options.diagnostics ?? {};
+  const targetWordCount = normalizeRequestedWordCount(options.wordCount);
+  const maxAttempts = Math.max(
+    targetWordCount * 2,
+    Math.ceil(targetWordCount / Math.max(config.wordsPerRequest, 1)) * 3
+  );
   let firstWordAt: number | null = null;
   let attempts = 0;
   let outputChars = 0;
   let diagnosticContent = "";
 
   try {
-    while (words.length < wordBatchSize && attempts < maxSingleWordAttempts) {
+    while (words.length < targetWordCount && attempts < maxAttempts) {
       attempts += 1;
       const requestStartedAt = Date.now();
-      const requestWordCount = Math.min(config.wordsPerRequest, wordBatchSize - words.length);
+      const requestWordCount = Math.min(config.wordsPerRequest, targetWordCount - words.length);
       const requestBody = buildRequestBody(
         context,
         config,
@@ -427,7 +460,7 @@ async function callOpenAiCompatibleProviderBatch(
 
       let acceptedCount = 0;
       for (const word of parsedWords) {
-        if (words.length >= wordBatchSize) {
+        if (words.length >= targetWordCount) {
           break;
         }
 
@@ -486,13 +519,13 @@ async function callOpenAiCompatibleProviderBatch(
       });
     }
 
-    if (words.length < wordBatchSize) {
+    if (words.length < targetWordCount) {
       throw new Error(
-        `LLM generated ${words.length}/${wordBatchSize} valid recommendation words after ${attempts} attempts`
+        `LLM generated ${words.length}/${targetWordCount} valid recommendation words after ${attempts} attempts`
       );
     }
 
-    const validatedWords = validateRecommendationWords(words);
+    const validatedWords = validateRecommendationWordList(words, targetWordCount);
     console.info("[llm] words-array batch telemetry", {
       requestId: diagnostics.requestId,
       provider: config.provider,
@@ -877,6 +910,14 @@ function clampWordsPerRequest(value: number): number {
   return Math.min(wordBatchSize, Math.max(1, value));
 }
 
+function normalizeRequestedWordCount(value: number | undefined): number {
+  if (typeof value !== "number" || !Number.isInteger(value)) {
+    return wordBatchSize;
+  }
+
+  return Math.min(wordBatchSize, Math.max(1, value));
+}
+
 function sanitizeProviderError(detail: string): string {
   return detail
     .slice(0, 220)
@@ -884,7 +925,11 @@ function sanitizeProviderError(detail: string): string {
     .replace(/bearer\s+[a-z0-9._-]+/gi, "Bearer [redacted]");
 }
 
-function mockRecommendations(context: LearningContext): RecommendationResult {
+function mockRecommendations(
+  context: LearningContext,
+  requestedCount = wordBatchSize
+): RecommendationResult {
+  const targetWordCount = normalizeRequestedWordCount(requestedCount);
   const pool = goalMockPools[context.learningGoal] ?? mockPool;
   const blocked = new Set(
     [
@@ -898,11 +943,11 @@ function mockRecommendations(context: LearningContext): RecommendationResult {
     .filter((word) => Math.abs(word.difficulty - context.targetDifficulty) <= 2)
     .filter((word) => !blocked.has(word.word.toLowerCase()));
   const fallback = pool.filter((word) => !blocked.has(word.word.toLowerCase()));
-  const selected = uniqueByWord([...preferred, ...fallback]).slice(0, wordBatchSize);
+  const selected = uniqueByWord([...preferred, ...fallback]).slice(0, targetWordCount);
 
   return {
     source: "mock",
-    words: selected.length === wordBatchSize ? selected : pool.slice(0, wordBatchSize)
+    words: selected.length === targetWordCount ? selected : pool.slice(0, targetWordCount)
   };
 }
 
